@@ -59,7 +59,7 @@ const CFG = {
   // --- 難しさ ---
   difficulty: {
     // 点数 = 輪郭の長さ + 0.4*(輪郭の数-1) + 8*狭い部分の割合
-    starAt: [4.5, 7, 10, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5
+    starAt: [4.5, 7.8, 10.5, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5（Phase 3: 7→7.8, 10→10.5 に調整）
     maxScore: 16,              // これを超えると「難しすぎます」
     maxTight: 0.30,            // 溝がくっつく部分の割合の上限
     tightDist: 0.07,           // 輪郭どうしがこれより近いと「狭い」
@@ -82,14 +82,15 @@ const CFG = {
   score: {
     wAccuracy: 400, wCrack: 300, wSpeed: 300,
     mult: [0.6, 0.7, 0.8, 0.9, 1.0],         // 難しさ★1〜5の倍率
-    rank: { S: 880, A: 750, B: 600 },        // 倍率をかける前の点数で判定
-    targetBase: 5, targetPerLen: 1.2,        // 目安時間(秒) = base + len*perLen
+    rank: { S: 930, A: 850, B: 700 },        // 倍率をかける前の点数で判定（Phase 3 で調整）
+    targetBase: 3, targetPerLen: 0.8,        // 目安時間(秒) = base + len*perLen（Phase 3 で調整）
   },
   // --- ランダム候補 ---
   pools: {
-    easy: ['一','二','三','十','口','日','人','大','小','山','川','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
-    normal: ['あ','い','う','え','お','か','き','く','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','空','海','森','犬','雨','星','田','雪','星'],
-    hard: ['魚','龍','鷹','薔','蝶','麒','麟','護','響','鑑','騒','優','驚','藍','蘭','鷲','蠍','贈','難','願','曜','縁','輝','観','麗','露','鯨','器','襲','織'],
+    // Phase 3: 全候補を実際に生成して「型にできる・理論上クリアできる・難しさ帯に収まる」を確認済み（verify.html が毎回再確認する）
+    easy: ['一','二','十','口','人','大','小','山','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
+    normal: ['あ','い','う','え','お','か','き','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','森','犬','田','三','日','川'],
+    hard: ['魚','蝶','優','願','観','器','織','雨','海','空','緑','桜','梅','蛇','熱','銀','館','鏡','歌','顔','数','楽','様','漢','鬼','盾','竜','虎','狼','蛍','鈴','琴','笛','旗','鍵','錠','験','番','線','細','結','緒','綺','繭','葉','蓮','藤','鮎','鱗','蟹','蛙','蜜','魂','華','橙'],
   },
   bands: { easy: [1, 2], normal: [2, 3], hard: [4, 5] },
 };
@@ -884,8 +885,81 @@ const SFX = {
   },
 };
 
+// ===== 記録と「あそびかた」既読の保存（純ロジック。localStorage は引数で受け取る）=====
+const REC_KEY = 'mojiKatanuki.record';
+const HOWTO_KEY = 'mojiKatanuki.howto';
+const REC_MAX_CHARS = 300;          // 記録する文字の上限（超えたら挑戦回数の少ない順に捨てる）
+const RANK_ORDER = { S: 4, A: 3, B: 2, C: 1 };
+
+function emptyRecord() { return { v: 1, total: 0, chars: {} }; }
+
+// 保存された値を安全に読み直す（壊れていても空の記録にする）
+function sanitizeRecord(o) {
+  const r = emptyRecord();
+  if (!o || typeof o !== 'object') return r;
+  if (Number.isFinite(o.total) && o.total > 0) r.total = Math.floor(o.total);
+  if (o.chars && typeof o.chars === 'object') {
+    for (const k of Object.keys(o.chars)) {
+      const c = o.chars[k];
+      if (!c || typeof c !== 'object' || Array.from(k).length !== 1) continue;
+      const tries = Number.isFinite(c.tries) && c.tries > 0 ? Math.floor(c.tries) : 0;
+      const clears = Number.isFinite(c.clears) && c.clears > 0 ? Math.min(Math.floor(c.clears), tries) : 0;
+      const hasBest = Number.isFinite(c.best) && c.best >= 0 && RANK_ORDER[c.rank];
+      r.chars[k] = { tries, clears, best: hasBest ? Math.round(c.best) : null, rank: hasBest ? c.rank : null,
+        stars: Number.isFinite(c.stars) ? clamp(Math.round(c.stars), 1, 5) : 1, last: Number.isFinite(c.last) ? c.last : 0 };
+    }
+  }
+  return r;
+}
+
+// 1 回の挑戦を記録に加える（元の記録は変えずに新しい記録を返す）
+// ok: 成功したか / sc: スコア結果（{total, rank}）/ now: 通し番号（新しい順の並びに使う）
+function recordAttempt(rec, ch, ok, sc, stars, now) {
+  const r = sanitizeRecord(rec);
+  const old = r.chars[ch];
+  const c = old ? Object.assign({}, old) : { tries: 0, clears: 0, best: null, rank: null, stars: 1, last: 0 };
+  c.tries++;
+  c.stars = clamp(Math.round(stars || 1), 1, 5);
+  c.last = now || r.total + 1;
+  let newBest = false;
+  if (ok && sc) {
+    c.clears++;
+    if (c.best === null || sc.total > c.best) {
+      newBest = c.best !== null;          // 初めての成功は「更新」ではない
+      c.best = sc.total; c.rank = sc.rank;
+    }
+  }
+  r.chars[ch] = c;
+  r.total++;
+  const keys = Object.keys(r.chars);
+  if (keys.length > REC_MAX_CHARS) {
+    keys.sort((a, b) => r.chars[a].last - r.chars[b].last);
+    for (let i = 0; i < keys.length - REC_MAX_CHARS; i++) delete r.chars[keys[i]];
+  }
+  return { rec: r, newBest, first: !old || old.best === null && ok, entry: c };
+}
+
+// きろく画面の並び（挑戦した文字を、最近挑戦した順に）
+function recordList(rec) {
+  const r = sanitizeRecord(rec);
+  return Object.keys(r.chars).map(ch => Object.assign({ ch }, r.chars[ch])).sort((a, b) => b.last - a.last);
+}
+
+function loadRecord(st) {
+  try { return st ? sanitizeRecord(JSON.parse(st.getItem(REC_KEY))) : emptyRecord(); } catch (_) { return emptyRecord(); }
+}
+function saveRecord(st, rec) {
+  try { if (!st) return false; st.setItem(REC_KEY, JSON.stringify(rec)); return true; } catch (_) { return false; }
+}
+function clearRecord(st) {
+  try { if (!st) return false; st.removeItem(REC_KEY); return true; } catch (_) { return false; }
+}
+function loadHowtoSeen(st) { try { return !!st && st.getItem(HOWTO_KEY) === '1'; } catch (_) { return false; } }
+function saveHowtoSeen(st) { try { if (!st) return false; st.setItem(HOWTO_KEY, '1'); return true; } catch (_) { return false; } }
+
 // ===== ここから検証本体（ロジックと文字の形生成。DOM の画面には依存しない）=====
 const P180 = judgeParams(180);
+const LEVEL_NAME_V = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' };
 function normalAt(loop, i, cx, cy) {
   const n = loop.n, a = (i + n - 1) % n, b = (i + 1) % n;
   let tx = loop.pts[2 * b] - loop.pts[2 * a], ty = loop.pts[2 * b + 1] - loop.pts[2 * a + 1];
@@ -1104,6 +1178,122 @@ const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅�
     const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
     T('ミュート: 保存できなくても落ちない（false を返す）', loadMuted(bad) === false && saveMuted(bad, true) === false && loadMuted(null) === false && saveMuted(null, true) === false);
     T('SFX: 音声を開始する前に呼んでも落ちない', (() => { try { SFX.crack(); SFX.part(); SFX.rank('S'); SFX.heart(0.5); SFX.scrapeSet(1, false); SFX.scrapeStop(); return SFX.on() === false; } catch (e) { return false; } })());
+  })();
+
+  // --- Phase 3: 記録の保存・更新（純ロジック）---
+  (function () {
+    const sc = (total, rank) => ({ total, rank });
+    let r = emptyRecord();
+    let o = recordAttempt(r, 'あ', true, sc(500, 'B'), 3, 1);
+    T('記録: 初めて抜けたときは「ベスト更新」ではなく記録される', !o.newBest && o.entry.best === 500 && o.entry.rank === 'B' && o.entry.tries === 1 && o.entry.clears === 1 && o.rec.total === 1);
+    T('記録: 元の記録オブジェクトは変えない', Object.keys(r.chars).length === 0 && r.total === 0);
+    r = o.rec;
+    o = recordAttempt(r, 'あ', true, sc(420, 'C'), 3, 2);
+    T('記録: 低い点ではベストは変わらない', !o.newBest && o.entry.best === 500 && o.entry.rank === 'B' && o.entry.tries === 2);
+    r = o.rec;
+    o = recordAttempt(r, 'あ', true, sc(780, 'A'), 3, 3);
+    T('記録: 高い点でベスト更新（点とランクが入れ替わる）', o.newBest && o.entry.best === 780 && o.entry.rank === 'A');
+    r = o.rec;
+    o = recordAttempt(r, 'あ', false, null, 3, 4);
+    T('記録: 失敗は挑戦回数だけ増え、ベストは残る', !o.newBest && o.entry.tries === 4 && o.entry.clears === 3 && o.entry.best === 780 && o.rec.total === 4);
+    r = o.rec;
+    o = recordAttempt(r, 'い', false, null, 2, 5);
+    T('記録: 一度も抜けていない文字は best が null', o.entry.best === null && o.entry.rank === null && o.rec.total === 5);
+    r = o.rec;
+    const list = recordList(r);
+    T('記録: 一覧は最近挑戦した順', list.length === 2 && list[0].ch === 'い' && list[1].ch === 'あ');
+    const mem = {};
+    const st = { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); }, removeItem: k => { delete mem[k]; } };
+    T('記録: 保存して読み戻せる', saveRecord(st, r) && JSON.stringify(loadRecord(st)) === JSON.stringify(sanitizeRecord(r)) && loadRecord(st).chars['あ'].best === 780);
+    T('記録: リセットすると空に戻る', clearRecord(st) && loadRecord(st).total === 0 && Object.keys(loadRecord(st).chars).length === 0);
+    mem[REC_KEY] = '{こわれた';
+    T('記録: 壊れた保存値でも空の記録で動く', loadRecord(st).total === 0);
+    mem[REC_KEY] = JSON.stringify({ total: -5, chars: { 'あ': { tries: 'x', best: 'y' }, 'ab': { tries: 3 }, 'い': { tries: 2, clears: 9, best: 300, rank: 'Z' } } });
+    const sn = loadRecord(st);
+    T('記録: 不正な値は捨てる（複数文字・不正ランク・clears が tries 超え）', sn.total === 0 && !sn.chars['ab'] && sn.chars['い'].best === null && sn.chars['い'].clears <= sn.chars['い'].tries);
+    const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+    T('記録: 保存できなくても落ちない', loadRecord(bad).total === 0 && saveRecord(bad, r) === false && clearRecord(bad) === false && loadRecord(null).total === 0 && saveRecord(null, r) === false);
+    T('あそびかた既読: 保存して読み戻せる・保存できなくても落ちない', loadHowtoSeen(st) === false && saveHowtoSeen(st) === true && loadHowtoSeen(st) === true && loadHowtoSeen(bad) === false && saveHowtoSeen(bad) === false && loadHowtoSeen(null) === false);
+    let big = emptyRecord();
+    for (let i = 0; i < REC_MAX_CHARS + 20; i++) big = recordAttempt(big, String.fromCodePoint(0x4e00 + i), false, null, 1, i + 1).rec;
+    T('記録: 文字数の上限を超えたら古いものから捨てる', Object.keys(big.chars).length === REC_MAX_CHARS && !big.chars[String.fromCodePoint(0x4e00)] && big.total === REC_MAX_CHARS + 20);
+  })();
+
+  // --- Phase 3: 候補文字の全数チェック（型にできる・理論上クリアできる・難しさ帯に収まる）---
+  // 輪郭を少しずれながらたどるボット（人の手ぶれの代わり）
+  function simBot(shape, speed, amp, seed, P) {
+    const d = newDig(shape, P || judgeParams(170));
+    let s = (seed >>> 0) || 1; const rn = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    let t = 0;
+    for (const part of shape.parts) for (const l of part.loops) {
+      if (d.failed || d.cleared) break;
+      const n = l.n, sp = speed * d.P.speedLimit, dt = (l.len / n) / sp;
+      const ph = [rn() * 6.28, rn() * 6.28, rn() * 6.28], fr = [3 + rn() * 3, 7 + rn() * 5, 13 + rn() * 6];
+      const off = i => { const u = i / n * 6.2832; return amp * Math.SQRT2 * (Math.sin(fr[0] * u + ph[0]) * 0.6 + Math.sin(fr[1] * u + ph[1]) * 0.3 + Math.sin(fr[2] * u + ph[2]) * 0.15) / Math.sqrt(0.4725); };
+      const at = i => { const k = i % n; const nm = normalAt(l, k, 0, 0); const o = off(k); return [l.pts[2 * k] + nm[0] * o, l.pts[2 * k + 1] + nm[1] * o]; };
+      const st = at(0);
+      if (!d.press(st[0], st[1]).ok) d.press(l.pts[0], l.pts[1]);
+      for (let i = 1; i <= n + 4 && d.down; i++) { const p = at(i); d.move(p[0], p[1], dt); }
+      d.release(); t += l.len / sp + 0.6;      // 針を離して置き直す時間のぶん
+    }
+    d.t = t;
+    return d;
+  }
+  const allPool = [];
+  for (const lv of ['easy', 'normal', 'hard']) for (const ch of CFG.pools[lv]) allPool.push([lv, ch]);
+  await loadGlyphFonts(allPool.map(p => p[1]).join(''));
+  (function () {
+    for (const lv of ['easy', 'normal', 'hard']) {
+      const dup = CFG.pools[lv].filter((c, i, a) => a.indexOf(c) !== i);
+      T('候補（' + LEVEL_NAME_V[lv] + '）: 重複がない', dup.length === 0, dup.join(''));
+    }
+    const bad = { make: [], clear: [], band: [], noisy: [] };
+    const dist = { easy: {}, normal: {}, hard: {} };
+    for (const [lv, ch] of allPool) {
+      const r = makeShapeSync(ch);
+      if (!r.ok) { bad.make.push(lv + ':' + ch + '(' + r.kind + ')'); continue; }
+      const sh = r.shape, band = CFG.bands[lv];
+      dist[lv][sh.stars] = (dist[lv][sh.stars] || 0) + 1;
+      if (sh.stars < band[0] || sh.stars > band[1]) bad.band.push(lv + ':' + ch + '★' + sh.stars);
+      let ok = true;
+      for (const R of [150, 340]) for (const sp of [0.3, 0.6]) {
+        const d = newDig(sh, judgeParams(R)); traceAll(d, sh, sp);
+        if (!d.cleared || d.failed) ok = false;
+      }
+      if (!ok) bad.clear.push(lv + ':' + ch);
+      const nb = simBot(sh, 0.6, 0.012, ch.codePointAt(0));
+      if (!nb.cleared) bad.noisy.push(lv + ':' + ch + '(' + nb.progress().toFixed(2) + ')');
+    }
+    const n = allPool.length;
+    T('候補 ' + n + ' 字: すべて型にできる', bad.make.length === 0, bad.make.join(' '));
+    T('候補 ' + n + ' 字: すべて輪郭をたどる針で理論上クリアできる（画面の大きさ 2 通り × 速さ 2 通り）', bad.clear.length === 0, bad.clear.join(' '));
+    T('候補 ' + n + ' 字: すべて難しさ帯に収まる（かんたん★1-2・ふつう★2-3・むずかしい★4-5）', bad.band.length === 0, bad.band.join(' '));
+    T('候補 ' + n + ' 字: 少しぶれる針（±0.012）でも全部クリアできる', bad.noisy.length === 0, bad.noisy.join(' '));
+    INFO('候補の★の分布 ' + JSON.stringify(dist) + ' / 数 かんたん' + CFG.pools.easy.length + ' ふつう' + CFG.pools.normal.length + ' むずかしい' + CFG.pools.hard.length);
+  })();
+
+  // --- Phase 3: 目安時間・ランク閾値（針のボットで S/A/B/C が妥当に分かれるか）---
+  (function () {
+    const sample = ['一', '二', '口', 'あ', 'の', 'ね', 'か', 'す', 'み', '月', '森', '田', 'ア', 'ミ', 'ほ', '花', '魚', '雨', '桜', '歌', '鬼', '虎', '鈴', '結'];
+    const run = (sp, am) => {
+      const rk = { S: 0, A: 0, B: 0, C: 0, fail: 0 }; let n = 0;
+      for (const ch of sample) for (let k = 0; k < 3; k++) {
+        const sh = makeShapeSync(ch).shape; n++;
+        const d = simBot(sh, sp, am, 900 + k * 77 + ch.codePointAt(0));
+        if (!d.cleared) { rk.fail++; continue; }
+        rk[scoreDig(d, sh).rank]++;
+      }
+      rk.n = n; return rk;
+    };
+    const care = run(0.35, 0.008), norm = run(0.7, 0.015), rough = run(0.7, 0.022), wild = run(1.0, 0.03);
+    INFO('ボット: ていねい(0.35,0.008)=' + JSON.stringify(care) + ' ふつう(0.7,0.015)=' + JSON.stringify(norm) + ' ざつ(0.7,0.022)=' + JSON.stringify(rough) + ' あらい(1.0,0.03)=' + JSON.stringify(wild));
+    T('ランク: ていねいに進めれば S（9 割以上）', care.S / care.n >= 0.9, JSON.stringify(care));
+    T('ランク: ふつうの速さ・ふつうの精度では A が中心（S は 2 割以下）', norm.A / norm.n >= 0.6 && norm.S / norm.n <= 0.2, JSON.stringify(norm));
+    T('ランク: 雑に進めると B が中心', rough.B / rough.n >= 0.5 && rough.S === 0, JSON.stringify(rough));
+    T('ランク: 荒く進めると C か失敗（S・A は出ない）', wild.S === 0 && wild.A === 0 && (wild.C + wild.fail) / wild.n >= 0.5, JSON.stringify(wild));
+    T('ランクの閾値は S > A > B', CFG.score.rank.S > CFG.score.rank.A && CFG.score.rank.A > CFG.score.rank.B && CFG.score.rank.B > 0);
+    const sq2 = makeShapeSync('口').shape, slow = simBot(sq2, 0.05, 0.005, 3);
+    T('速さ: 目安時間を大きく超えると速さの点が減る', slow.cleared && scoreDig(slow, sq2).ps < CFG.score.wSpeed && scoreDig(simBot(sq2, 0.5, 0.005, 3), sq2).ps === CFG.score.wSpeed, 'slow=' + scoreDig(slow, sq2).ps + ' t=' + slow.t.toFixed(1) + ' target=' + targetTime(sq2).toFixed(1));
   })();
 
   document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;

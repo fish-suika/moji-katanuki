@@ -1,6 +1,8 @@
 
 // ===== 起動・テスト用フック =====
-setPh($('ttl'), '文字型抜き');
+setPh($('ttl'), '文字|型抜き');
+setPh($('ttlLead'), '砂糖菓子の文字を|割らないように|針で切り抜こう');
+document.querySelectorAll('.auto').forEach(el => setPh(el, el.textContent));
 show('scTitle');
 requestAnimationFrame(frame);
 loadGlyphFonts('あアA').catch(() => { });
@@ -34,6 +36,8 @@ window.__DEBUG = {
     return this.state();
   },
   cutAll() { return this.trace(0.5); },
-  startWord, startRandom, beginChar, showResult,
+  startWord, startRandom, beginChar, showResult, showHow, showRecords, leaveGame,
+  get rec() { return G.rec; },
+  get howSeen() { return G.howSeen; },
   shapeOf: ch => makeShapeSync(ch),
 };

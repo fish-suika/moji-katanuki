@@ -26,10 +26,13 @@
 
   /* 画面 */
   .screen{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:safe center;
-    gap:14px;padding:20px 16px;overflow:auto;touch-action:pan-y;text-align:center}
+    gap:14px;padding:20px 16px calc(72px + env(safe-area-inset-bottom));overflow:auto;touch-action:pan-y;text-align:center}
   .screen.on{display:flex}
   #scTitle h1{font-size:clamp(40px,12vw,76px);letter-spacing:.08em;line-height:1.2}
-  #scTitle p{font-size:15px;opacity:.7}
+  #scTitle .lead{font-size:clamp(14px,3.8vw,18px);font-weight:700;opacity:.75;max-width:20em}
+  #scTitle>*:not(canvas){position:relative;z-index:1}
+  #tCv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+  .stack{display:flex;flex-direction:column;gap:12px;align-items:center}
   .btn{border:0;border-radius:999px;padding:12px 28px;font-size:20px;font-weight:900;background:var(--pink);color:#fff;
     box-shadow:0 4px 0 var(--pinkd);min-width:150px}
   .btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--pinkd)}
@@ -62,7 +65,6 @@
     opacity:0;transition:opacity .2s;pointer-events:none}
   #toast.on{opacity:1}
   #toast.bad{background:rgba(200,40,80,.94)}
-  #quit{position:absolute;left:10px;bottom:10px;z-index:2}
 
   /* 結果 */
   #scResult h2{font-size:26px}
@@ -98,14 +100,77 @@
   .chip{background:#fff;border-radius:14px;padding:6px 12px;box-shadow:0 3px 0 var(--line);font-size:22px;font-weight:900}
   .chip small{font-size:13px;margin-left:6px;color:var(--pinkd)}
   .msg{font-size:16px;font-weight:700}
+  #rBest{min-height:0;font-weight:900;font-size:18px;color:#d4366b}
+  #rBest:empty{display:none}
+  #rBest.new{animation:bestPop .6s cubic-bezier(.2,.9,.3,1) both}
+  @keyframes bestPop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.15);opacity:1}100%{transform:scale(1)}}
+  @media (prefers-reduced-motion:reduce){#rBest.new{animation:none}}
+
+  /* あそびかた */
+  #scHow h2,#scRec h2{font-size:26px}
+  .how{width:min(100%,440px);display:flex;flex-direction:column;gap:10px;text-align:left}
+  .how .it{background:var(--card);border-radius:18px;padding:10px 14px;box-shadow:0 3px 0 var(--line);font-size:15px;font-weight:700;line-height:1.6}
+  .how .it b{display:block;font-size:16px;color:var(--pinkd);font-weight:900}
+  .zones{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+  .zone{border-radius:10px;padding:3px 10px;font-size:13px;font-weight:900;color:#fff}
+  .zone.ok{background:#4aae7c}.zone.warn{background:#e8a200}.zone.ng{background:#d03a5f}
+
+  /* きろく */
+  .recSum{font-size:17px;font-weight:900}
+  .recList{width:min(100%,440px);display:flex;flex-direction:column;gap:8px}
+  .recRow{display:grid;grid-template-columns:2.2em 2.4em 1fr auto;align-items:center;gap:8px;background:var(--card);
+    border-radius:14px;padding:6px 12px;box-shadow:0 3px 0 var(--line);text-align:left;font-weight:900}
+  .recRow .c{font-size:24px;text-align:center}
+  .recRow .r{font-size:22px;color:var(--pinkd);text-align:center}
+  .recRow .r.C{color:#8a98a8}.recRow .r.S{color:#ff5c93}
+  .recRow .p{font-size:16px;font-variant-numeric:tabular-nums}
+  .recRow .t{font-size:12px;opacity:.65;white-space:nowrap}
+  .recNone{opacity:.7;font-weight:700}
+  .conf{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;font-weight:900;font-size:15px}
+  .conf[hidden]{display:none}
+  /* 横持ち（高さが小さい画面）はぎゅっと詰める */
+  @media (max-height:480px){
+    .screen{gap:8px;padding:10px 16px calc(60px + env(safe-area-inset-bottom))}
+    #scTitle h1{font-size:clamp(34px,9vh,48px)}
+    #scTitle .lead{max-width:none}
+    #scTitle .stack{flex-direction:row}
+    #scSelect h2,#scHow h2,#scRec h2,#scResult h2{font-size:20px}
+    #rank{font-size:56px;min-height:56px}#rank.fail{font-size:36px;min-height:36px}
+    #score{font-size:24px}
+    .bd{font-size:14px;gap:2px 16px}
+    .how{display:grid;grid-template-columns:1fr 1fr;width:min(100%,680px);gap:8px}
+    .how .it{font-size:14px;padding:8px 12px}
+  }
+  #quitBox{position:absolute;left:10px;bottom:10px;z-index:2;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 70px)}
+  #quitAsk{display:none;align-items:center;gap:8px;background:rgba(255,255,255,.94);border-radius:999px;padding:4px 6px 4px 14px;
+    box-shadow:0 3px 0 var(--line);font-weight:900;font-size:14px;border:2px solid var(--line)}
+  #quitBox.ask #quitAsk{display:flex}
+  #quitBox.ask #quit{display:none}
 </style>
 </head>
 <body>
 <div id="app">
   <button id="mute" type="button" aria-pressed="false" aria-label="音を消す">♪</button>
   <section class="screen" id="scTitle">
+    <canvas id="tCv" aria-hidden="true"></canvas>
     <h1 id="ttl"></h1>
-    <button class="btn" id="bStart">はじめる</button>
+    <p class="lead" id="ttlLead"></p>
+    <div class="stack">
+      <button class="btn" id="bStart">あそぶ</button>
+      <button class="btn sub" id="bHow">あそびかた</button>
+    </div>
+  </section>
+
+  <section class="screen" id="scHow">
+    <h2>あそびかた</h2>
+    <div class="how">
+      <div class="it"><b>針をうごかす</b><span class="auto">マウスや指で|針を動かして、|刻まれた溝を|なぞって切ろう。|スマホでは|針が指の少し上に|出るよ。</span></div>
+      <div class="it"><b>溝・フチ・外</b><span class="auto">溝の中は安全。|フチはヒビが入り、|外に出ると|割れて失敗。</span>
+        <div class="zones"><span class="zone ok nw">溝の中</span><span class="zone warn nw">フチ</span><span class="zone ng nw">外</span></div></div>
+      <div class="it"><b>ヒビ</b><span class="auto">ヒビがたまって|満タンになると割れる。|速く動かしても|ヒビが入るよ。</span></div>
+      <div class="it"><b>ゆっくり丁寧が正解</b><span class="auto">急ぐほど危ない。|針を離しても、|溝の上なら|また刺せる。|穴のフチも|切ろう。</span></div>
+    </div>
+    <div class="row"><button class="btn" id="bHowGo">もどる</button></div>
   </section>
 
   <section class="screen" id="scSelect">
@@ -119,12 +184,26 @@
       </div>
     </div>
     <div class="box">
-      <h3>文字を入力（1〜6 文字）</h3>
+      <h3 class="auto">文字を入力|（1〜6 文字）</h3>
       <input id="inp" type="text" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="あ  など">
       <button class="btn sm" id="bGo">この言葉で挑戦</button>
     </div>
     <div id="selMsg" class="msg"></div>
-    <button class="btn sub sm" id="bBackTitle">もどる</button>
+    <div class="row">
+      <button class="btn sub sm" id="bBackTitle">もどる</button>
+      <button class="btn sub sm" id="bRec">きろく</button>
+    </div>
+  </section>
+
+  <section class="screen" id="scRec">
+    <h2>きろく</h2>
+    <div class="recSum" id="recSum"></div>
+    <div class="row">
+      <button class="btn sub sm" id="bRecBack">もどる</button>
+      <button class="btn sub sm" id="bRecReset">きろくを消す</button>
+    </div>
+    <div class="conf" id="recConf" hidden><span id="recAsk"></span><button class="btn sm" id="bRecYes">消す</button><button class="btn sub sm" id="bRecNo">やめる</button></div>
+    <div class="recList" id="recList"></div>
   </section>
 
   <section id="scGame">
@@ -140,7 +219,10 @@
       <canvas id="cv"></canvas>
       <div id="vig"></div>
       <div id="toast"></div>
-      <button class="btn sub sm" id="quit">やめる</button>
+      <div id="quitBox">
+        <button class="btn sub sm" id="quit">やめる</button>
+        <span id="quitAsk"><span class="nw">やめますか？</span><button class="btn sm" id="quitYes">やめる</button><button class="btn sub sm" id="quitNo">つづける</button></span>
+      </div>
     </div>
   </section>
 
@@ -150,6 +232,7 @@
     <div id="score"></div>
     <div class="bd" id="rBd"></div>
     <div class="chips" id="rChips"></div>
+    <div class="msg" id="rBest"></div>
     <div class="msg" id="rMsg"></div>
     <div class="row" id="rBtns"></div>
   </section>
@@ -178,7 +261,7 @@ const CFG = {
   // --- 難しさ ---
   difficulty: {
     // 点数 = 輪郭の長さ + 0.4*(輪郭の数-1) + 8*狭い部分の割合
-    starAt: [4.5, 7, 10, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5
+    starAt: [4.5, 7.8, 10.5, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5（Phase 3: 7→7.8, 10→10.5 に調整）
     maxScore: 16,              // これを超えると「難しすぎます」
     maxTight: 0.30,            // 溝がくっつく部分の割合の上限
     tightDist: 0.07,           // 輪郭どうしがこれより近いと「狭い」
@@ -201,14 +284,15 @@ const CFG = {
   score: {
     wAccuracy: 400, wCrack: 300, wSpeed: 300,
     mult: [0.6, 0.7, 0.8, 0.9, 1.0],         // 難しさ★1〜5の倍率
-    rank: { S: 880, A: 750, B: 600 },        // 倍率をかける前の点数で判定
-    targetBase: 5, targetPerLen: 1.2,        // 目安時間(秒) = base + len*perLen
+    rank: { S: 930, A: 850, B: 700 },        // 倍率をかける前の点数で判定（Phase 3 で調整）
+    targetBase: 3, targetPerLen: 0.8,        // 目安時間(秒) = base + len*perLen（Phase 3 で調整）
   },
   // --- ランダム候補 ---
   pools: {
-    easy: ['一','二','三','十','口','日','人','大','小','山','川','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
-    normal: ['あ','い','う','え','お','か','き','く','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','空','海','森','犬','雨','星','田','雪','星'],
-    hard: ['魚','龍','鷹','薔','蝶','麒','麟','護','響','鑑','騒','優','驚','藍','蘭','鷲','蠍','贈','難','願','曜','縁','輝','観','麗','露','鯨','器','襲','織'],
+    // Phase 3: 全候補を実際に生成して「型にできる・理論上クリアできる・難しさ帯に収まる」を確認済み（verify.html が毎回再確認する）
+    easy: ['一','二','十','口','人','大','小','山','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
+    normal: ['あ','い','う','え','お','か','き','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','森','犬','田','三','日','川'],
+    hard: ['魚','蝶','優','願','観','器','織','雨','海','空','緑','桜','梅','蛇','熱','銀','館','鏡','歌','顔','数','楽','様','漢','鬼','盾','竜','虎','狼','蛍','鈴','琴','笛','旗','鍵','錠','験','番','線','細','結','緒','綺','繭','葉','蓮','藤','鮎','鱗','蟹','蛙','蜜','魂','華','橙'],
   },
   bands: { easy: [1, 2], normal: [2, 3], hard: [4, 5] },
 };
@@ -1294,6 +1378,78 @@ const SFX = {
   },
 };
 
+// ===== 記録と「あそびかた」既読の保存（純ロジック。localStorage は引数で受け取る）=====
+const REC_KEY = 'mojiKatanuki.record';
+const HOWTO_KEY = 'mojiKatanuki.howto';
+const REC_MAX_CHARS = 300;          // 記録する文字の上限（超えたら挑戦回数の少ない順に捨てる）
+const RANK_ORDER = { S: 4, A: 3, B: 2, C: 1 };
+
+function emptyRecord() { return { v: 1, total: 0, chars: {} }; }
+
+// 保存された値を安全に読み直す（壊れていても空の記録にする）
+function sanitizeRecord(o) {
+  const r = emptyRecord();
+  if (!o || typeof o !== 'object') return r;
+  if (Number.isFinite(o.total) && o.total > 0) r.total = Math.floor(o.total);
+  if (o.chars && typeof o.chars === 'object') {
+    for (const k of Object.keys(o.chars)) {
+      const c = o.chars[k];
+      if (!c || typeof c !== 'object' || Array.from(k).length !== 1) continue;
+      const tries = Number.isFinite(c.tries) && c.tries > 0 ? Math.floor(c.tries) : 0;
+      const clears = Number.isFinite(c.clears) && c.clears > 0 ? Math.min(Math.floor(c.clears), tries) : 0;
+      const hasBest = Number.isFinite(c.best) && c.best >= 0 && RANK_ORDER[c.rank];
+      r.chars[k] = { tries, clears, best: hasBest ? Math.round(c.best) : null, rank: hasBest ? c.rank : null,
+        stars: Number.isFinite(c.stars) ? clamp(Math.round(c.stars), 1, 5) : 1, last: Number.isFinite(c.last) ? c.last : 0 };
+    }
+  }
+  return r;
+}
+
+// 1 回の挑戦を記録に加える（元の記録は変えずに新しい記録を返す）
+// ok: 成功したか / sc: スコア結果（{total, rank}）/ now: 通し番号（新しい順の並びに使う）
+function recordAttempt(rec, ch, ok, sc, stars, now) {
+  const r = sanitizeRecord(rec);
+  const old = r.chars[ch];
+  const c = old ? Object.assign({}, old) : { tries: 0, clears: 0, best: null, rank: null, stars: 1, last: 0 };
+  c.tries++;
+  c.stars = clamp(Math.round(stars || 1), 1, 5);
+  c.last = now || r.total + 1;
+  let newBest = false;
+  if (ok && sc) {
+    c.clears++;
+    if (c.best === null || sc.total > c.best) {
+      newBest = c.best !== null;          // 初めての成功は「更新」ではない
+      c.best = sc.total; c.rank = sc.rank;
+    }
+  }
+  r.chars[ch] = c;
+  r.total++;
+  const keys = Object.keys(r.chars);
+  if (keys.length > REC_MAX_CHARS) {
+    keys.sort((a, b) => r.chars[a].last - r.chars[b].last);
+    for (let i = 0; i < keys.length - REC_MAX_CHARS; i++) delete r.chars[keys[i]];
+  }
+  return { rec: r, newBest, first: !old || old.best === null && ok, entry: c };
+}
+
+// きろく画面の並び（挑戦した文字を、最近挑戦した順に）
+function recordList(rec) {
+  const r = sanitizeRecord(rec);
+  return Object.keys(r.chars).map(ch => Object.assign({ ch }, r.chars[ch])).sort((a, b) => b.last - a.last);
+}
+
+function loadRecord(st) {
+  try { return st ? sanitizeRecord(JSON.parse(st.getItem(REC_KEY))) : emptyRecord(); } catch (_) { return emptyRecord(); }
+}
+function saveRecord(st, rec) {
+  try { if (!st) return false; st.setItem(REC_KEY, JSON.stringify(rec)); return true; } catch (_) { return false; }
+}
+function clearRecord(st) {
+  try { if (!st) return false; st.removeItem(REC_KEY); return true; } catch (_) { return false; }
+}
+function loadHowtoSeen(st) { try { return !!st && st.getItem(HOWTO_KEY) === '1'; } catch (_) { return false; } }
+function saveHowtoSeen(st) { try { if (!st) return false; st.setItem(HOWTO_KEY, '1'); return true; } catch (_) { return false; } }
+
 // ===== 画面・操作・進行 =====
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1303,8 +1459,54 @@ function wrapPhrases(text) {
 }
 function setPh(el, text) { el.innerHTML = wrapPhrases(text); }
 
-const SCREENS = ['scTitle', 'scSelect', 'scGame', 'scResult'];
-function show(id) { for (const s of SCREENS) $(s).classList.toggle('on', s === id); G.screen = id; }
+const SCREENS = ['scTitle', 'scHow', 'scSelect', 'scRec', 'scGame', 'scResult'];
+function show(id) {
+  for (const s of SCREENS) $(s).classList.toggle('on', s === id);
+  G.screen = id;
+  if (id === 'scTitle') requestAnimationFrame(drawTitleDeco);
+}
+
+// ---------- 記録・既読（保存できなくても動く）----------
+G.store = getStorage();
+G.rec = loadRecord(G.store);
+G.howSeen = loadHowtoSeen(G.store);
+G.attempt = 0;
+
+// ---------- タイトルの飾り（砂糖菓子の質感を流用。軽く）----------
+let titleDeco = null;
+function drawTitleDeco() {
+  const c = $('tCv'), box = $('scTitle');
+  const w = box.clientWidth, h = box.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const key = w + 'x' + h + '@' + dpr;
+  if (!titleDeco || titleDeco.key !== key) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const s = Math.min(w, h), x = c.getContext('2d');
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    x.clearRect(0, 0, w, h);
+    const specs = [[0.13, 0.12, 0.17, 0, 0.35, '文'], [0.9, 0.2, 0.12, 1, -0.4, '字'], [0.1, 0.86, 0.13, 2, 0.5, '型'], [0.88, 0.88, 0.18, 4, -0.25, '抜']];
+    for (const [fx, fy, fr, ci, rot, ch] of specs) {
+      const R = Math.max(26, s * fr), px = w * fx, py = h * fy;
+      const tex = bakeCandy(CANDY[ci], 11 + ci * 17, R, dpr);
+      x.save();
+      x.translate(px, py); x.rotate(rot);
+      x.globalAlpha = 0.9;
+      x.fillStyle = 'rgba(90,40,60,.12)';
+      x.beginPath(); x.ellipse(R * 0.04, R * 0.1, R, R * 0.97, 0, 0, 6.2832); x.fill();
+      x.drawImage(tex, -TEX_SPAN * R, -TEX_SPAN * R, TEX_SPAN * R * 2, TEX_SPAN * R * 2);
+      x.font = '900 ' + Math.round(R * 1.05) + 'px ' + CFG.glyph.families.join(',');
+      x.textAlign = 'center'; x.textBaseline = 'middle'; x.lineJoin = 'round';
+      x.rotate(-rot * 0.4);
+      x.lineWidth = Math.max(2, R * 0.06);
+      x.strokeStyle = CANDY[ci].groove; x.fillStyle = 'rgba(' + CANDY[ci].tint + ',.14)';
+      x.fillText(ch, 0, R * 0.04); x.strokeText(ch, 0, R * 0.04);
+      x.restore();
+    }
+    titleDeco = { key };
+  }
+}
+window.addEventListener('resize', () => { if (G.screen === 'scTitle') drawTitleDeco(); });
 
 let toastTimer = 0;
 function toast(msg, bad, ms) {
@@ -1361,7 +1563,20 @@ async function startRandom(level) {
   $('selMsg').textContent = '';
   if (!r) { setPh($('selMsg'), '文字を作れませんでした'); return; }
   G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
-  beginChar(r);
+  launch(r);
+}
+// 最初の型抜きの前に、あそびかたを 1 回だけ自動で出す
+function launch(r) {
+  if (G.howSeen) { beginChar(r); return; }
+  showHow(() => beginChar(r));
+}
+let howNext = null;
+function showHow(next) {
+  howNext = next || null;
+  $('bHowGo').textContent = howNext ? 'はじめる' : 'もどる';
+  show('scHow');
+  $('scHow').scrollTop = 0;
+  if (!G.howSeen) { G.howSeen = true; saveHowtoSeen(G.store); }
 }
 async function startWord(str) {
   const v = validateInput(str);
@@ -1375,7 +1590,7 @@ async function startWord(str) {
   }
   $('selMsg').textContent = '';
   G.session = { mode: 'word', chars: v.chars, idx: 0, results: [] };
-  beginChar(shapes[0]);
+  launch(shapes[0]);
   return true;
 }
 async function beginChar(res) {
@@ -1390,6 +1605,8 @@ async function beginChar(res) {
   G.color = CANDY[Math.floor(Math.random() * CANDY.length)];
   G.seed = (Math.random() * 1e9) | 0;
   G.over = false; G.needle.vis = false; G.touch = false;
+  G.attempt++;
+  $('quitBox').classList.remove('ask');
   G.paths = buildPaths(G.shape);
   G.fx = newFx(G.seed);
   G.tex = bakeCandy(G.color, G.seed, G.view.R, G.view.dpr);
@@ -1419,7 +1636,9 @@ function handleEvents(evs) {
       G.over = true;
       SFX.scrapeStop();
       toast('抜けた！', false, 900);
-      setTimeout(() => showResult(true), FX.clearMs);
+      $('quitBox').classList.remove('ask');
+      const tok = G.attempt;
+      setTimeout(() => { if (G.attempt === tok && G.screen === 'scGame') showResult(true); }, FX.clearMs);
     } else if (e.type === 'fail' && !G.over) {
       G.over = true;
       const fp = G.dig.failPos || { x: G.needle.x, y: G.needle.y };
@@ -1427,7 +1646,9 @@ function handleEvents(evs) {
       crackBurst(G.fx.cracks, fp.x, fp.y, 7);
       SFX.shatter();
       toast(e.why === 'out' ? '割れた！|溝の外に出た' : '割れた！|ヒビが満タン', true, 1500);
-      setTimeout(() => showResult(false), FX.failMs);
+      $('quitBox').classList.remove('ask');
+      const tok = G.attempt;
+      setTimeout(() => { if (G.attempt === tok && G.screen === 'scGame') showResult(false); }, FX.failMs);
     }
   }
 }
@@ -1438,7 +1659,16 @@ function showResult(ok) {
   let sc = null;
   if (ok) sc = scoreDig(dig, G.shape, G.P);
   S.results[S.idx] = { ch: G.char, ok, sc, stars: G.shape.stars };
+  // 記録（保存できなくても、このセッションの間は覚えている）
+  const rr = recordAttempt(G.rec, G.char, ok, sc, G.shape.stars, Date.now());
+  G.rec = rr.rec;
+  saveRecord(G.store, G.rec);
   show('scResult');
+  const bestEl = $('rBest');
+  bestEl.className = 'msg';
+  if (rr.newBest) { setPh(bestEl, 'ベスト更新！'); bestEl.classList.add('new'); }
+  else if (rr.entry.best !== null) setPh(bestEl, 'この文字のベスト：|' + rr.entry.rank + '　' + rr.entry.best + ' 点');
+  else bestEl.textContent = '';
   $('rChips').innerHTML = '';
   setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
   const rk = $('rank');
@@ -1488,6 +1718,7 @@ function showSummary() {
   let total = 0, cleared = 0;
   for (const r of S.results) if (r) { if (r.ok) { total += r.sc.total; cleared++; } }
   setPh($('rTitle'), '「' + S.chars.join('') + '」の結果');
+  $('rBest').textContent = '';
   const rk = $('rank'); rk.className = ''; rk.textContent = cleared + ' / ' + S.chars.length;
   $('score').textContent = '合計 ' + total + ' 点';
   $('rBd').innerHTML = '';
@@ -1503,6 +1734,27 @@ function showSummary() {
 }
 
 function toSelect() { show('scSelect'); $('selMsg').textContent = ''; }
+
+// ---------- きろく ----------
+function showRecords() {
+  const list = recordList(G.rec), box = $('recList');
+  $('recConf').hidden = true;
+  $('bRecReset').hidden = !G.rec.total;
+  if (!G.rec.total) {
+    setPh($('recSum'), 'まだ挑戦していません');
+    box.innerHTML = '';
+  } else {
+    const clears = list.reduce((a, r) => a + r.clears, 0);
+    setPh($('recSum'), 'ぜんぶで ' + G.rec.total + ' 回|挑戦（' + clears + ' 回 成功）');
+    box.innerHTML = list.map(r =>
+      '<div class="recRow"><span class="c">' + esc(r.ch) + '</span>' +
+      '<span class="r ' + (r.rank || '') + '">' + (r.rank || '—') + '</span>' +
+      '<span class="p">' + (r.best !== null ? r.best + ' 点' : 'まだ抜けていない') + '</span>' +
+      '<span class="t">' + r.tries + ' 回</span></div>').join('');
+  }
+  show('scRec');
+  $('scRec').scrollTop = 0;
+}
 
 // ---------- 針の操作 ----------
 function setNeedle(e) {
@@ -1558,11 +1810,25 @@ document.addEventListener('gesturestart', e => e.preventDefault());
 
 // ---------- ボタン ----------
 $('bStart').addEventListener('click', toSelect);
+$('bHow').addEventListener('click', () => showHow(null));
+$('bHowGo').addEventListener('click', () => {
+  const f = howNext; howNext = null;
+  if (f) f(); else show('scTitle');
+});
+$('bRec').addEventListener('click', showRecords);
+$('bRecBack').addEventListener('click', toSelect);
+$('bRecReset').addEventListener('click', () => { setPh($('recAsk'), 'きろくを|ぜんぶ消しますか？'); $('recConf').hidden = false; });
+$('bRecNo').addEventListener('click', () => { $('recConf').hidden = true; });
+$('bRecYes').addEventListener('click', () => { G.rec = emptyRecord(); clearRecord(G.store); showRecords(); });
 $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-$('quit').addEventListener('click', () => { SFX.scrapeStop(); toSelect(); });
+function leaveGame() { G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
+// 型抜き中は、誤タップで失わないよう確認する（割れた・抜けたあとは確認なし）
+$('quit').addEventListener('click', () => { if (G.over || !G.dig || G.dig.failed || G.dig.cleared) leaveGame(); else $('quitBox').classList.add('ask'); });
+$('quitYes').addEventListener('click', leaveGame);
+$('quitNo').addEventListener('click', () => $('quitBox').classList.remove('ask'));
 
 // ---------- 音（最初の操作で有効化。♪ でミュート）----------
 ['pointerdown', 'touchend', 'click', 'keydown'].forEach(n => document.addEventListener(n, () => SFX.unlock(), { capture: true }));
@@ -1612,7 +1878,9 @@ function frame(t) {
 }
 
 // ===== 起動・テスト用フック =====
-setPh($('ttl'), '文字型抜き');
+setPh($('ttl'), '文字|型抜き');
+setPh($('ttlLead'), '砂糖菓子の文字を|割らないように|針で切り抜こう');
+document.querySelectorAll('.auto').forEach(el => setPh(el, el.textContent));
 show('scTitle');
 requestAnimationFrame(frame);
 loadGlyphFonts('あアA').catch(() => { });
@@ -1646,7 +1914,9 @@ window.__DEBUG = {
     return this.state();
   },
   cutAll() { return this.trace(0.5); },
-  startWord, startRandom, beginChar, showResult,
+  startWord, startRandom, beginChar, showResult, showHow, showRecords, leaveGame,
+  get rec() { return G.rec; },
+  get howSeen() { return G.howSeen; },
   shapeOf: ch => makeShapeSync(ch),
 };
 </script>

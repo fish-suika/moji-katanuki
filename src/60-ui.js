@@ -8,8 +8,54 @@ function wrapPhrases(text) {
 }
 function setPh(el, text) { el.innerHTML = wrapPhrases(text); }
 
-const SCREENS = ['scTitle', 'scSelect', 'scGame', 'scResult'];
-function show(id) { for (const s of SCREENS) $(s).classList.toggle('on', s === id); G.screen = id; }
+const SCREENS = ['scTitle', 'scHow', 'scSelect', 'scRec', 'scGame', 'scResult'];
+function show(id) {
+  for (const s of SCREENS) $(s).classList.toggle('on', s === id);
+  G.screen = id;
+  if (id === 'scTitle') requestAnimationFrame(drawTitleDeco);
+}
+
+// ---------- 記録・既読（保存できなくても動く）----------
+G.store = getStorage();
+G.rec = loadRecord(G.store);
+G.howSeen = loadHowtoSeen(G.store);
+G.attempt = 0;
+
+// ---------- タイトルの飾り（砂糖菓子の質感を流用。軽く）----------
+let titleDeco = null;
+function drawTitleDeco() {
+  const c = $('tCv'), box = $('scTitle');
+  const w = box.clientWidth, h = box.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const key = w + 'x' + h + '@' + dpr;
+  if (!titleDeco || titleDeco.key !== key) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    const s = Math.min(w, h), x = c.getContext('2d');
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    x.clearRect(0, 0, w, h);
+    const specs = [[0.13, 0.12, 0.17, 0, 0.35, '文'], [0.9, 0.2, 0.12, 1, -0.4, '字'], [0.1, 0.86, 0.13, 2, 0.5, '型'], [0.88, 0.88, 0.18, 4, -0.25, '抜']];
+    for (const [fx, fy, fr, ci, rot, ch] of specs) {
+      const R = Math.max(26, s * fr), px = w * fx, py = h * fy;
+      const tex = bakeCandy(CANDY[ci], 11 + ci * 17, R, dpr);
+      x.save();
+      x.translate(px, py); x.rotate(rot);
+      x.globalAlpha = 0.9;
+      x.fillStyle = 'rgba(90,40,60,.12)';
+      x.beginPath(); x.ellipse(R * 0.04, R * 0.1, R, R * 0.97, 0, 0, 6.2832); x.fill();
+      x.drawImage(tex, -TEX_SPAN * R, -TEX_SPAN * R, TEX_SPAN * R * 2, TEX_SPAN * R * 2);
+      x.font = '900 ' + Math.round(R * 1.05) + 'px ' + CFG.glyph.families.join(',');
+      x.textAlign = 'center'; x.textBaseline = 'middle'; x.lineJoin = 'round';
+      x.rotate(-rot * 0.4);
+      x.lineWidth = Math.max(2, R * 0.06);
+      x.strokeStyle = CANDY[ci].groove; x.fillStyle = 'rgba(' + CANDY[ci].tint + ',.14)';
+      x.fillText(ch, 0, R * 0.04); x.strokeText(ch, 0, R * 0.04);
+      x.restore();
+    }
+    titleDeco = { key };
+  }
+}
+window.addEventListener('resize', () => { if (G.screen === 'scTitle') drawTitleDeco(); });
 
 let toastTimer = 0;
 function toast(msg, bad, ms) {
@@ -66,7 +112,20 @@ async function startRandom(level) {
   $('selMsg').textContent = '';
   if (!r) { setPh($('selMsg'), '文字を作れませんでした'); return; }
   G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
-  beginChar(r);
+  launch(r);
+}
+// 最初の型抜きの前に、あそびかたを 1 回だけ自動で出す
+function launch(r) {
+  if (G.howSeen) { beginChar(r); return; }
+  showHow(() => beginChar(r));
+}
+let howNext = null;
+function showHow(next) {
+  howNext = next || null;
+  $('bHowGo').textContent = howNext ? 'はじめる' : 'もどる';
+  show('scHow');
+  $('scHow').scrollTop = 0;
+  if (!G.howSeen) { G.howSeen = true; saveHowtoSeen(G.store); }
 }
 async function startWord(str) {
   const v = validateInput(str);
@@ -80,7 +139,7 @@ async function startWord(str) {
   }
   $('selMsg').textContent = '';
   G.session = { mode: 'word', chars: v.chars, idx: 0, results: [] };
-  beginChar(shapes[0]);
+  launch(shapes[0]);
   return true;
 }
 async function beginChar(res) {
@@ -95,6 +154,8 @@ async function beginChar(res) {
   G.color = CANDY[Math.floor(Math.random() * CANDY.length)];
   G.seed = (Math.random() * 1e9) | 0;
   G.over = false; G.needle.vis = false; G.touch = false;
+  G.attempt++;
+  $('quitBox').classList.remove('ask');
   G.paths = buildPaths(G.shape);
   G.fx = newFx(G.seed);
   G.tex = bakeCandy(G.color, G.seed, G.view.R, G.view.dpr);
@@ -124,7 +185,9 @@ function handleEvents(evs) {
       G.over = true;
       SFX.scrapeStop();
       toast('抜けた！', false, 900);
-      setTimeout(() => showResult(true), FX.clearMs);
+      $('quitBox').classList.remove('ask');
+      const tok = G.attempt;
+      setTimeout(() => { if (G.attempt === tok && G.screen === 'scGame') showResult(true); }, FX.clearMs);
     } else if (e.type === 'fail' && !G.over) {
       G.over = true;
       const fp = G.dig.failPos || { x: G.needle.x, y: G.needle.y };
@@ -132,7 +195,9 @@ function handleEvents(evs) {
       crackBurst(G.fx.cracks, fp.x, fp.y, 7);
       SFX.shatter();
       toast(e.why === 'out' ? '割れた！|溝の外に出た' : '割れた！|ヒビが満タン', true, 1500);
-      setTimeout(() => showResult(false), FX.failMs);
+      $('quitBox').classList.remove('ask');
+      const tok = G.attempt;
+      setTimeout(() => { if (G.attempt === tok && G.screen === 'scGame') showResult(false); }, FX.failMs);
     }
   }
 }
@@ -143,7 +208,16 @@ function showResult(ok) {
   let sc = null;
   if (ok) sc = scoreDig(dig, G.shape, G.P);
   S.results[S.idx] = { ch: G.char, ok, sc, stars: G.shape.stars };
+  // 記録（保存できなくても、このセッションの間は覚えている）
+  const rr = recordAttempt(G.rec, G.char, ok, sc, G.shape.stars, Date.now());
+  G.rec = rr.rec;
+  saveRecord(G.store, G.rec);
   show('scResult');
+  const bestEl = $('rBest');
+  bestEl.className = 'msg';
+  if (rr.newBest) { setPh(bestEl, 'ベスト更新！'); bestEl.classList.add('new'); }
+  else if (rr.entry.best !== null) setPh(bestEl, 'この文字のベスト：|' + rr.entry.rank + '　' + rr.entry.best + ' 点');
+  else bestEl.textContent = '';
   $('rChips').innerHTML = '';
   setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
   const rk = $('rank');
@@ -193,6 +267,7 @@ function showSummary() {
   let total = 0, cleared = 0;
   for (const r of S.results) if (r) { if (r.ok) { total += r.sc.total; cleared++; } }
   setPh($('rTitle'), '「' + S.chars.join('') + '」の結果');
+  $('rBest').textContent = '';
   const rk = $('rank'); rk.className = ''; rk.textContent = cleared + ' / ' + S.chars.length;
   $('score').textContent = '合計 ' + total + ' 点';
   $('rBd').innerHTML = '';
@@ -208,6 +283,27 @@ function showSummary() {
 }
 
 function toSelect() { show('scSelect'); $('selMsg').textContent = ''; }
+
+// ---------- きろく ----------
+function showRecords() {
+  const list = recordList(G.rec), box = $('recList');
+  $('recConf').hidden = true;
+  $('bRecReset').hidden = !G.rec.total;
+  if (!G.rec.total) {
+    setPh($('recSum'), 'まだ挑戦していません');
+    box.innerHTML = '';
+  } else {
+    const clears = list.reduce((a, r) => a + r.clears, 0);
+    setPh($('recSum'), 'ぜんぶで ' + G.rec.total + ' 回|挑戦（' + clears + ' 回 成功）');
+    box.innerHTML = list.map(r =>
+      '<div class="recRow"><span class="c">' + esc(r.ch) + '</span>' +
+      '<span class="r ' + (r.rank || '') + '">' + (r.rank || '—') + '</span>' +
+      '<span class="p">' + (r.best !== null ? r.best + ' 点' : 'まだ抜けていない') + '</span>' +
+      '<span class="t">' + r.tries + ' 回</span></div>').join('');
+  }
+  show('scRec');
+  $('scRec').scrollTop = 0;
+}
 
 // ---------- 針の操作 ----------
 function setNeedle(e) {
@@ -263,11 +359,25 @@ document.addEventListener('gesturestart', e => e.preventDefault());
 
 // ---------- ボタン ----------
 $('bStart').addEventListener('click', toSelect);
+$('bHow').addEventListener('click', () => showHow(null));
+$('bHowGo').addEventListener('click', () => {
+  const f = howNext; howNext = null;
+  if (f) f(); else show('scTitle');
+});
+$('bRec').addEventListener('click', showRecords);
+$('bRecBack').addEventListener('click', toSelect);
+$('bRecReset').addEventListener('click', () => { setPh($('recAsk'), 'きろくを|ぜんぶ消しますか？'); $('recConf').hidden = false; });
+$('bRecNo').addEventListener('click', () => { $('recConf').hidden = true; });
+$('bRecYes').addEventListener('click', () => { G.rec = emptyRecord(); clearRecord(G.store); showRecords(); });
 $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-$('quit').addEventListener('click', () => { SFX.scrapeStop(); toSelect(); });
+function leaveGame() { G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
+// 型抜き中は、誤タップで失わないよう確認する（割れた・抜けたあとは確認なし）
+$('quit').addEventListener('click', () => { if (G.over || !G.dig || G.dig.failed || G.dig.cleared) leaveGame(); else $('quitBox').classList.add('ask'); });
+$('quitYes').addEventListener('click', leaveGame);
+$('quitNo').addEventListener('click', () => $('quitBox').classList.remove('ask'));
 
 // ---------- 音（最初の操作で有効化。♪ でミュート）----------
 ['pointerdown', 'touchend', 'click', 'keydown'].forEach(n => document.addEventListener(n, () => SFX.unlock(), { capture: true }));
