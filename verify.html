@@ -498,6 +498,178 @@ function scoreDig(dig, shape, P) {
   return { acc, crk, spd, pa, pc, ps, base, mult, total, rank, time: dig.t, target: tg, meanD };
 }
 
+// ===== 演出の純ロジック（DOM に依存しない。verify.html からも呼ぶ）=====
+const FX = {
+  crackStep: 0.09,        // ヒビゲージがこれ増えるごとに新しいヒビが 1 本伸びる
+  crackMax: 22,           // 菓子の上のヒビの最大本数
+  heartFrom: 0.3,         // ヒビゲージがこれ以上で心音が鳴り始める
+  heartSlow: 1.15,        // 心音の間隔(秒)：鳴り始め
+  heartFast: 0.38,        // 心音の間隔(秒)：ゲージ満タン
+  vigFrom: 0.25,          // ビネットが出始めるゲージ
+  vigMax: 0.5,            // ゲージ満タン時のビネットの濃さ
+  liftSec: 0.4,           // 部品が浮き上がる時間
+  shatterAt: 0.3,         // 失敗：割れ目が走る時間（その後かけらが落ちる）
+  shakeSec: 0.3,          // 画面の揺れの長さ
+  shakePx: 8,             // 画面の揺れの大きさ(px)
+  shakePxReduced: 1.5,
+  gravity: 3.2,           // かけらの落ちる加速度（半径/秒²）
+  shards: 11,             // かけらの数
+  powder: 36,             // 部品 1 つが外れたときの粉の数
+  powderReduced: 10,
+  failMs: 1300,           // 失敗：結果画面までの時間(ms)
+  clearMs: 1000,          // 成功：結果画面までの時間(ms)
+};
+
+function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function reducedMotion() {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (_) { return false; }
+}
+
+// ---------- ヒビ（折れ線）----------
+function crackWalk(r, x, y, a, segs, segLen, jitter) {
+  const pts = [[x, y]];
+  for (let i = 0; i < segs; i++) {
+    a += (r() - 0.5) * jitter;
+    const l = segLen * (0.7 + r() * 0.6);
+    x += Math.cos(a) * l; y += Math.sin(a) * l;
+    pts.push([x, y]);
+  }
+  return { pts, a };
+}
+function newCrackSet(seed) { return { rng: rnd((seed * 7 + 13) >>> 0), items: [], burst: [], next: FX.crackStep }; }
+function spawnCrack(set, x, y, gauge) {
+  const r = set.rng;
+  const a0 = r() * 6.2832;
+  const segLen = 0.05 + gauge * 0.11;
+  const segs = 4 + Math.floor(r() * 3);
+  const main = crackWalk(r, x, y, a0, segs, segLen, 1.0);
+  const branches = [];
+  const nb = (r() < 0.55 + gauge * 0.35 ? 1 : 0) + (gauge > 0.6 && r() < 0.5 ? 1 : 0);
+  for (let b = 0; b < nb; b++) {
+    const k = 1 + Math.floor(r() * (segs - 1)), p = main.pts[k];
+    const side = r() < 0.5 ? -1 : 1;
+    branches.push(crackWalk(r, p[0], p[1], a0 + side * (0.5 + r() * 0.6), 2 + Math.floor(r() * 2), segLen * 0.7, 1.0).pts);
+  }
+  set.items.push({ pts: main.pts, branches, g0: gauge });
+}
+// ゲージが増えた分だけヒビを足す。足した本数を返す
+function crackUpdate(set, x, y, gauge) {
+  let added = 0;
+  while (gauge >= set.next && set.items.length < FX.crackMax) {
+    spawnCrack(set, x, y, gauge); set.next += FX.crackStep; added++;
+  }
+  return added;
+}
+// そのヒビがどこまで伸びたか(0..1)。新しいヒビも最初から少し見え、ゲージが増えると伸びる
+function crackGrow(it, gauge) { return clamp(0.3 + (gauge - it.g0) * 3.2, 0, 1); }
+function polyLen2(pts) { let s = 0; for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return s; }
+function crackLength(set, gauge) {
+  let s = 0;
+  for (const it of set.items) {
+    const g = crackGrow(it, gauge);
+    s += polyLen2(it.pts) * g;
+    for (const b of it.branches) s += polyLen2(b) * g;
+  }
+  return s;
+}
+// 失敗した瞬間、針の位置から割れ目が走る
+function crackBurst(set, x, y, n) {
+  const r = set.rng;
+  n = n || 7;
+  const base = r() * 6.2832;
+  set.burst = [];
+  for (let i = 0; i < n; i++) {
+    const a = base + i * 6.2832 / n + (r() - 0.5) * 0.7;
+    const m = crackWalk(r, x, y, a, 7, 0.17, 1.1);
+    const k = 2 + Math.floor(r() * 3), p = m.pts[k];
+    const br = crackWalk(r, p[0], p[1], a + (r() < 0.5 ? -1 : 1) * 0.8, 3, 0.12, 1.0);
+    set.burst.push(m.pts, br.pts);
+  }
+  return set.burst;
+}
+
+// ---------- かけら（割れた菓子を放射状の多角形に分ける）----------
+function makeShards(seed, cx, cy, n) {
+  const r = rnd((seed * 31 + 5) >>> 0);
+  n = n || FX.shards;
+  const step = 6.2832 / n, base = r() * 6.2832;
+  const rays = [];
+  for (let i = 0; i < n; i++) {
+    const a = base + i * step + (r() - 0.5) * step * 0.6;
+    const ux = Math.cos(a), uy = Math.sin(a);
+    const b = cx * ux + cy * uy, t = -b + Math.sqrt(Math.max(0, b * b + 1 - cx * cx - cy * cy));
+    const nx = -uy, ny = ux;
+    const j1 = (r() - 0.5) * 0.09, j2 = (r() - 0.5) * 0.09;
+    rays.push({
+      pts: [[cx + ux * t * 0.35 + nx * j1, cy + uy * t * 0.35 + ny * j1], [cx + ux * t * 0.7 + nx * j2, cy + uy * t * 0.7 + ny * j2], [cx + ux * t, cy + uy * t]],
+    });
+  }
+  const shards = [];
+  for (let i = 0; i < n; i++) {
+    const A = rays[i].pts, B = rays[(i + 1) % n].pts;
+    const poly = [[cx, cy], A[0], A[1], A[2]];
+    const a0 = Math.atan2(A[2][1], A[2][0]);
+    let a1 = Math.atan2(B[2][1], B[2][0]);
+    if (a1 <= a0) a1 += 6.2832;
+    for (let k = 1; k <= 3; k++) { const a = a0 + (a1 - a0) * k / 4; poly.push([Math.cos(a), Math.sin(a)]); }
+    poly.push(B[2], B[1], B[0]);
+    let mx = 0, my = 0;
+    for (const p of poly) { mx += p[0]; my += p[1]; }
+    mx /= poly.length; my /= poly.length;
+    shards.push({
+      poly, cx: mx, cy: my, area: polyArea(poly),
+      vx: mx * 0.55 + (r() - 0.5) * 0.5, vy: -0.15 - r() * 0.55, w: (r() - 0.5) * 6,
+    });
+  }
+  return shards;
+}
+function shardPos(s, t) { return { dx: s.vx * t, dy: s.vy * t + 0.5 * FX.gravity * t * t, rot: s.w * t }; }
+
+// ---------- 粉 ----------
+function spawnPowder(seed, src, n) {
+  const r = rnd((seed * 17 + 3) >>> 0), out = [];
+  if (!src || !src.length) return out;
+  for (let i = 0; i < n; i++) {
+    const p = src[Math.floor(r() * src.length)];
+    out.push({ x: p[0], y: p[1], vx: (r() - 0.5) * 0.5, vy: -(0.12 + r() * 0.5), life: 0.6 + r() * 0.6, age: 0, size: 0.005 + r() * 0.011, c: r() < 0.5 ? 0 : 1 });
+  }
+  return out;
+}
+function stepPowder(list, dt) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
+    p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.7 * dt;
+    if (p.age >= p.life) list.splice(i, 1);
+  }
+}
+
+// ---------- 緊張感 ----------
+// 心音の間隔(秒)。ヒビが少ないうちは null（鳴らさない）
+function heartInterval(crack) {
+  if (!(crack >= FX.heartFrom)) return null;
+  const t = clamp((crack - FX.heartFrom) / (1 - FX.heartFrom), 0, 1);
+  return FX.heartSlow + (FX.heartFast - FX.heartSlow) * t;
+}
+function vignetteAlpha(crack) {
+  if (!(crack > FX.vigFrom)) return 0;
+  return clamp((crack - FX.vigFrom) / (1 - FX.vigFrom), 0, 1) * FX.vigMax;
+}
+// 部品の浮き上がり具合 0..1（なめらかに減速）
+function liftAmount(t) {
+  if (!(t > 0)) return 0;
+  if (t >= FX.liftSec) return 1;
+  const u = 1 - t / FX.liftSec;
+  return 1 - u * u * u;
+}
+// 失敗からの経過秒 el での画面の揺れの大きさ(px)
+function shakeAmp(el, reduced) {
+  if (!(el >= 0) || el >= FX.shakeSec) return 0;
+  return (reduced ? FX.shakePxReduced : FX.shakePx) * (1 - el / FX.shakeSec);
+}
+function newFx(seed) {
+  return { cracks: newCrackSet(seed), powder: [], partT: [], failT: -1, shards: null, snap: null, beatAt: 0, lastMove: 0 };
+}
+
 // ===== 文字 → 型（キャンバスに描いて読み取る。verify.html でも使う）=====
 const GLYPH = { cache: new Map(), refs: null, canvas: null };
 
@@ -587,6 +759,130 @@ async function makeShape(ch) {
   if (!GLYPH.cache.has(ch)) await loadGlyphFonts(ch);
   return makeShapeSync(ch);
 }
+
+// ===== 効果音（WebAudio で生成。外部素材なし）=====
+const MUTE_KEY = 'mojiKatanuki.mute';
+function loadMuted(st) { try { return !!st && st.getItem(MUTE_KEY) === '1'; } catch (_) { return false; } }
+function saveMuted(st, v) { try { if (!st) return false; st.setItem(MUTE_KEY, v ? '1' : '0'); return true; } catch (_) { return false; } }
+function getStorage() { try { return window.localStorage || null; } catch (_) { return null; } }
+
+const SFX = {
+  ctx: null, master: null, noiseBuf: null, scr: null,
+  muted: loadMuted(getStorage()),
+  // 最初のユーザー操作で呼ぶ（何度呼んでもよい）
+  unlock() {
+    try {
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.9;
+        this.master.connect(this.ctx.destination);
+        const n = this.ctx.sampleRate * 2, b = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = b.getChannelData(0);
+        for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+        this.noiseBuf = b;
+      }
+      if (this.ctx.state === 'suspended') { const p = this.ctx.resume(); if (p && p.catch) p.catch(() => { }); }
+    } catch (_) { this.ctx = null; }
+  },
+  setMuted(v) {
+    this.muted = !!v;
+    saveMuted(getStorage(), this.muted);
+    if (this.master) { try { this.master.gain.setTargetAtTime(this.muted ? 0 : 0.9, this.ctx.currentTime, 0.02); } catch (_) { } }
+    if (this.muted) this.scrapeStop();
+  },
+  on() { return !!(this.ctx && !this.muted && this.ctx.state === 'running'); },
+  tone(f0, f1, t0, dur, vol, type) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.01, dur / 3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  },
+  noise(t0, dur, vol, type, f0, f1, q) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf;
+    f.type = type; f.Q.value = q || 0.8;
+    f.frequency.setValueAtTime(f0, t0);
+    if (f1) f.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.008, dur / 3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t0, Math.random() * 1.5); s.stop(t0 + dur + 0.02);
+  },
+  // 削る音：動かしている間だけ鳴るノイズ。速さで高さと大きさが変わる
+  scrapeStart() {
+    if (!this.on() || this.scr) return;
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf; s.loop = true;
+    f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.2;
+    g.gain.value = 0;
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start();
+    this.scr = { s, f, g };
+  },
+  // ratio: 速さ / 速度上限（0 で止まっている）。edge: フチ（ヒビが入っている）か
+  scrapeSet(ratio, edge) {
+    const r = this.scr;
+    if (!r || !this.ctx) return;
+    const k = clamp(ratio, 0, 1.4), t = this.ctx.currentTime;
+    const vol = k < 0.02 ? 0 : (0.02 + 0.07 * Math.min(1, k)) * (edge ? 1.5 : 1);
+    r.g.gain.setTargetAtTime(vol, t, 0.03);
+    r.f.frequency.setTargetAtTime(650 + 1700 * k + (edge ? 600 : 0), t, 0.04);
+    r.f.Q.setTargetAtTime(edge ? 3 : 1.2, t, 0.05);
+  },
+  scrapeStop() {
+    const r = this.scr;
+    if (!r) return;
+    this.scr = null;
+    try {
+      r.g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.02);
+      r.s.stop(this.ctx.currentTime + 0.15);
+    } catch (_) { }
+  },
+  crack() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.06, 0.28, 'highpass', 3200, 5000, 0.7);
+    this.tone(2100, 900, t, 0.06, 0.1, 'triangle');
+  },
+  shatter() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.scrapeStop();
+    this.noise(t, 0.5, 0.55, 'lowpass', 7000, 500, 0.7);
+    this.tone(170, 48, t, 0.3, 0.55, 'sine');
+    for (let i = 0; i < 7; i++) this.noise(t + 0.03 + Math.random() * 0.4, 0.04, 0.22, 'highpass', 2500 + Math.random() * 3000, null, 0.8);
+  },
+  part() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.tone(440, 880, t, 0.13, 0.22, 'sine');
+    this.tone(660, 1320, t + 0.05, 0.14, 0.15, 'sine');
+    this.noise(t, 0.18, 0.1, 'bandpass', 2600, 1800, 1);
+  },
+  rank(rank) {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    const seq = { S: [523, 659, 784, 1047], A: [392, 523, 659], B: [392, 523], C: [330] }[rank];
+    if (!seq) return;
+    seq.forEach((f, i) => this.tone(f, f, t + i * 0.11, 0.28, 0.2, 'triangle'));
+    if (rank === 'S') for (let i = 0; i < 4; i++) this.tone(2093 + i * 260, 2093 + i * 260, t + 0.45 + i * 0.07, 0.18, 0.07, 'sine');
+  },
+  // 心音。strength: 0..1（ヒビが多いほど強く）
+  heart(strength) {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime, v = 0.22 + 0.4 * clamp(strength, 0, 1);
+    this.tone(78, 42, t, 0.14, v, 'sine');
+    this.tone(70, 40, t + 0.17, 0.14, v * 0.7, 'sine');
+  },
+};
 
 // ===== ここから検証本体（ロジックと文字の形生成。DOM の画面には依存しない）=====
 const P180 = judgeParams(180);
@@ -762,6 +1058,52 @@ const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅�
     T('極端に複雑な文字（鬱・龘）は「難しすぎます」で止まらず断る', !a.ok && a.kind === 'toohard' && !b.ok && b.kind === 'toohard' && /難しすぎます/.test(a.msg), '鬱=' + (a.shape ? a.shape.difficultyScore.toFixed(1) : a.kind) + ' 龘=' + (b.shape ? b.shape.difficultyScore.toFixed(1) : b.kind));
     const easy = ['一', '口', 'L', 'O', 'あ', 'ア', '木', '日'].map(c => makeShapeSync(c));
     T('ふつうの文字は断られない', easy.every(r => r.ok), easy.map(r => r.ch + ':' + r.ok).join(' '));
+  })();
+
+  // --- Phase 2: 演出の純ロジック ---
+  (function () {
+    const a = newCrackSet(42);
+    T('ヒビ: ゲージが閾値未満なら増えない', crackUpdate(a, 0, 0, 0.05) === 0 && a.items.length === 0);
+    crackUpdate(a, 0.1, 0.1, 0.4);
+    const n4 = a.items.length, L4 = crackLength(a, 0.4);
+    crackUpdate(a, 0.2, 0.2, 0.9);
+    const n9 = a.items.length, L9 = crackLength(a, 0.9);
+    T('ヒビ: ゲージが増えると本数と長さが増える', n4 > 0 && n9 > n4 && L9 > L4 * 1.5, 'n:' + n4 + '→' + n9 + ' len:' + L4.toFixed(2) + '→' + L9.toFixed(2));
+    const b = newCrackSet(42); crackUpdate(b, 0.1, 0.1, 0.4); crackUpdate(b, 0.2, 0.2, 0.9);
+    T('ヒビ: 同じ seed なら同じ形（再現できる）', JSON.stringify(a.items) === JSON.stringify(b.items));
+    const c = newCrackSet(7); for (let g = 0; g <= 1.0001; g += 0.01) crackUpdate(c, 0, 0, Math.min(1, g));
+    T('ヒビ: 本数に上限がある', c.items.length <= FX.crackMax && c.items.length >= 8, 'n=' + c.items.length);
+    T('ヒビ: 針の位置から始まる', a.items[0].pts[0][0] === 0.1 && a.items[0].pts[0][1] === 0.1);
+    const bs = crackBurst(newCrackSet(3), 0.2, -0.1, 7);
+    T('割れ目: 針の位置から複数本が走る', bs.length >= 14 && bs.every(p => p.length >= 3));
+  })();
+  (function () {
+    const sh = makeShards(5, 0.2, -0.3, FX.shards);
+    const total = sh.reduce((s, q) => s + q.area, 0);
+    T('かけら: 個数と、合計面積が菓子の面積にほぼ等しい', sh.length === FX.shards && total > 0.9 * Math.PI && total < 1.0001 * Math.PI, 'n=' + sh.length + ' area=' + total.toFixed(3) + ' π=' + Math.PI.toFixed(3));
+    T('かけら: すべて菓子の円の内側', sh.every(q => q.poly.every(p => Math.hypot(p[0], p[1]) <= 1.0001)));
+    const p0 = shardPos(sh[0], 0), p1 = shardPos(sh[0], 1);
+    T('かけら: 時間とともに落ちる', p0.dy === 0 && p1.dy > 1, 'dy@1s=' + p1.dy.toFixed(2));
+    const pw = spawnPowder(1, [[0, 0], [0.1, 0]], 20);
+    T('粉: 指定数が出て、寿命で消える', pw.length === 20 && (stepPowder(pw, 0.3), pw.length === 20) && (stepPowder(pw, 5), pw.length === 0));
+    T('粉: 元の点が無ければ出ない', spawnPowder(1, [], 10).length === 0);
+  })();
+  (function () {
+    T('心音: ヒビが少ないうちは鳴らない', heartInterval(0) === null && heartInterval(0.29) === null);
+    const h = [0.3, 0.5, 0.7, 0.9, 1].map(heartInterval);
+    T('心音: ヒビが多いほど間隔が短い', h.every((v, i) => v !== null && (i === 0 || v < h[i - 1])) && Math.abs(h[4] - FX.heartFast) < 1e-9, h.map(v => v.toFixed(2)).join(','));
+    T('ビネット: 低いヒビでは出ず、増えるほど濃い（最大値まで）', vignetteAlpha(0.2) === 0 && vignetteAlpha(0.6) > 0 && vignetteAlpha(0.9) > vignetteAlpha(0.6) && Math.abs(vignetteAlpha(1) - FX.vigMax) < 1e-9);
+    T('浮き上がり: 0 から 1 へなめらかに増える', liftAmount(-1) === 0 && liftAmount(0.1) > 0 && liftAmount(0.2) > liftAmount(0.1) && liftAmount(FX.liftSec) === 1 && liftAmount(5) === 1);
+    T('画面の揺れ: 失敗直後だけ。reduced-motion では小さい', shakeAmp(-1, false) === 0 && shakeAmp(0, false) === FX.shakePx && shakeAmp(0, true) < shakeAmp(0, false) && shakeAmp(FX.shakeSec + 0.1, false) === 0);
+  })();
+  (function () {
+    const mem = {};
+    const st = { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); } };
+    saveMuted(st, true);
+    T('ミュート: 保存して読み戻せる', loadMuted(st) === true && (saveMuted(st, false), loadMuted(st) === false));
+    const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+    T('ミュート: 保存できなくても落ちない（false を返す）', loadMuted(bad) === false && saveMuted(bad, true) === false && loadMuted(null) === false && saveMuted(null, true) === false);
+    T('SFX: 音声を開始する前に呼んでも落ちない', (() => { try { SFX.crack(); SFX.part(); SFX.rank('S'); SFX.heart(0.5); SFX.scrapeSet(1, false); SFX.scrapeStop(); return SFX.on() === false; } catch (e) { return false; } })());
   })();
 
   document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;

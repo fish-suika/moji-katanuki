@@ -66,8 +66,31 @@
 
   /* 結果 */
   #scResult h2{font-size:26px}
-  #rank{font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
-  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px}
+  #rank{position:relative;display:inline-block;min-height:96px;font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
+  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px;min-height:48px}
+  #rank.S{color:#ff5c93;text-shadow:0 0 16px rgba(255,205,80,.95),0 3px 0 #fff}
+  #rank.pop{animation:rankPop .5s cubic-bezier(.2,.9,.3,1) both}
+  #rank.S.pop{animation:rankPopS .75s cubic-bezier(.2,.9,.3,1) both}
+  @keyframes rankPop{0%{transform:scale(.15);opacity:0}55%{transform:scale(1.22);opacity:1}78%{transform:scale(.94)}100%{transform:scale(1);opacity:1}}
+  @keyframes rankPopS{0%{transform:scale(.1) rotate(-14deg);opacity:0}45%{transform:scale(1.5) rotate(5deg);opacity:1}65%{transform:scale(.9) rotate(-2deg)}82%{transform:scale(1.12)}100%{transform:scale(1) rotate(0);opacity:1}}
+  .spark{position:absolute;left:50%;top:50%;font-size:24px;line-height:1;color:#ffc42e;pointer-events:none;
+    animation:spark .9s ease-out both}
+  @keyframes spark{0%{transform:translate(-50%,-50%) scale(0);opacity:1}60%{opacity:1}100%{transform:translate(calc(-50% + var(--dx)),calc(-50% + var(--dy))) scale(1.3);opacity:0}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @media (prefers-reduced-motion:reduce){
+    #rank.pop,#rank.S.pop{animation:fadeIn .3s both}
+    .spark{display:none}
+  }
+
+  /* 緊張感：ヒビが多いと画面の縁が暗くなる */
+  #vig{position:absolute;inset:0;pointer-events:none;opacity:0;z-index:3;
+    background:radial-gradient(ellipse at center,rgba(40,0,20,0) 48%,rgba(40,0,20,.75) 100%)}
+  /* ミュート */
+  #mute{position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:20;width:44px;height:44px;
+    border-radius:50%;border:2px solid var(--line);background:#fff;font-size:22px;font-weight:900;line-height:1;
+    box-shadow:0 3px 0 var(--line);display:flex;align-items:center;justify-content:center;padding:0}
+  #mute.off{color:#b9a4ad}
+  #mute.off::after{content:"";position:absolute;width:30px;height:3px;background:#c0305c;border-radius:2px;transform:rotate(-45deg)}
   #score{font-size:34px;font-weight:900}
   .bd{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:16px;text-align:left}
   .bd b{text-align:right;font-variant-numeric:tabular-nums}
@@ -79,6 +102,7 @@
 </head>
 <body>
 <div id="app">
+  <button id="mute" type="button" aria-pressed="false" aria-label="音を消す">♪</button>
   <section class="screen" id="scTitle">
     <h1 id="ttl"></h1>
     <button class="btn" id="bStart">はじめる</button>
@@ -114,6 +138,7 @@
     </div>
     <div id="stageWrap">
       <canvas id="cv"></canvas>
+      <div id="vig"></div>
       <div id="toast"></div>
       <button class="btn sub sm" id="quit">やめる</button>
     </div>

@@ -175,6 +175,52 @@ const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅�
     T('ふつうの文字は断られない', easy.every(r => r.ok), easy.map(r => r.ch + ':' + r.ok).join(' '));
   })();
 
+  // --- Phase 2: 演出の純ロジック ---
+  (function () {
+    const a = newCrackSet(42);
+    T('ヒビ: ゲージが閾値未満なら増えない', crackUpdate(a, 0, 0, 0.05) === 0 && a.items.length === 0);
+    crackUpdate(a, 0.1, 0.1, 0.4);
+    const n4 = a.items.length, L4 = crackLength(a, 0.4);
+    crackUpdate(a, 0.2, 0.2, 0.9);
+    const n9 = a.items.length, L9 = crackLength(a, 0.9);
+    T('ヒビ: ゲージが増えると本数と長さが増える', n4 > 0 && n9 > n4 && L9 > L4 * 1.5, 'n:' + n4 + '→' + n9 + ' len:' + L4.toFixed(2) + '→' + L9.toFixed(2));
+    const b = newCrackSet(42); crackUpdate(b, 0.1, 0.1, 0.4); crackUpdate(b, 0.2, 0.2, 0.9);
+    T('ヒビ: 同じ seed なら同じ形（再現できる）', JSON.stringify(a.items) === JSON.stringify(b.items));
+    const c = newCrackSet(7); for (let g = 0; g <= 1.0001; g += 0.01) crackUpdate(c, 0, 0, Math.min(1, g));
+    T('ヒビ: 本数に上限がある', c.items.length <= FX.crackMax && c.items.length >= 8, 'n=' + c.items.length);
+    T('ヒビ: 針の位置から始まる', a.items[0].pts[0][0] === 0.1 && a.items[0].pts[0][1] === 0.1);
+    const bs = crackBurst(newCrackSet(3), 0.2, -0.1, 7);
+    T('割れ目: 針の位置から複数本が走る', bs.length >= 14 && bs.every(p => p.length >= 3));
+  })();
+  (function () {
+    const sh = makeShards(5, 0.2, -0.3, FX.shards);
+    const total = sh.reduce((s, q) => s + q.area, 0);
+    T('かけら: 個数と、合計面積が菓子の面積にほぼ等しい', sh.length === FX.shards && total > 0.9 * Math.PI && total < 1.0001 * Math.PI, 'n=' + sh.length + ' area=' + total.toFixed(3) + ' π=' + Math.PI.toFixed(3));
+    T('かけら: すべて菓子の円の内側', sh.every(q => q.poly.every(p => Math.hypot(p[0], p[1]) <= 1.0001)));
+    const p0 = shardPos(sh[0], 0), p1 = shardPos(sh[0], 1);
+    T('かけら: 時間とともに落ちる', p0.dy === 0 && p1.dy > 1, 'dy@1s=' + p1.dy.toFixed(2));
+    const pw = spawnPowder(1, [[0, 0], [0.1, 0]], 20);
+    T('粉: 指定数が出て、寿命で消える', pw.length === 20 && (stepPowder(pw, 0.3), pw.length === 20) && (stepPowder(pw, 5), pw.length === 0));
+    T('粉: 元の点が無ければ出ない', spawnPowder(1, [], 10).length === 0);
+  })();
+  (function () {
+    T('心音: ヒビが少ないうちは鳴らない', heartInterval(0) === null && heartInterval(0.29) === null);
+    const h = [0.3, 0.5, 0.7, 0.9, 1].map(heartInterval);
+    T('心音: ヒビが多いほど間隔が短い', h.every((v, i) => v !== null && (i === 0 || v < h[i - 1])) && Math.abs(h[4] - FX.heartFast) < 1e-9, h.map(v => v.toFixed(2)).join(','));
+    T('ビネット: 低いヒビでは出ず、増えるほど濃い（最大値まで）', vignetteAlpha(0.2) === 0 && vignetteAlpha(0.6) > 0 && vignetteAlpha(0.9) > vignetteAlpha(0.6) && Math.abs(vignetteAlpha(1) - FX.vigMax) < 1e-9);
+    T('浮き上がり: 0 から 1 へなめらかに増える', liftAmount(-1) === 0 && liftAmount(0.1) > 0 && liftAmount(0.2) > liftAmount(0.1) && liftAmount(FX.liftSec) === 1 && liftAmount(5) === 1);
+    T('画面の揺れ: 失敗直後だけ。reduced-motion では小さい', shakeAmp(-1, false) === 0 && shakeAmp(0, false) === FX.shakePx && shakeAmp(0, true) < shakeAmp(0, false) && shakeAmp(FX.shakeSec + 0.1, false) === 0);
+  })();
+  (function () {
+    const mem = {};
+    const st = { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); } };
+    saveMuted(st, true);
+    T('ミュート: 保存して読み戻せる', loadMuted(st) === true && (saveMuted(st, false), loadMuted(st) === false));
+    const bad = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+    T('ミュート: 保存できなくても落ちない（false を返す）', loadMuted(bad) === false && saveMuted(bad, true) === false && loadMuted(null) === false && saveMuted(null, true) === false);
+    T('SFX: 音声を開始する前に呼んでも落ちない', (() => { try { SFX.crack(); SFX.part(); SFX.rank('S'); SFX.heart(0.5); SFX.scrapeSet(1, false); SFX.scrapeStop(); return SFX.on() === false; } catch (e) { return false; } })());
+  })();
+
   document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;
   document.title = (fail ? 'FAIL ' : 'OK ') + pass + '/' + (pass + fail);
 })();

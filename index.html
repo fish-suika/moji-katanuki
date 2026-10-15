@@ -66,8 +66,31 @@
 
   /* 結果 */
   #scResult h2{font-size:26px}
-  #rank{font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
-  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px}
+  #rank{position:relative;display:inline-block;min-height:96px;font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
+  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px;min-height:48px}
+  #rank.S{color:#ff5c93;text-shadow:0 0 16px rgba(255,205,80,.95),0 3px 0 #fff}
+  #rank.pop{animation:rankPop .5s cubic-bezier(.2,.9,.3,1) both}
+  #rank.S.pop{animation:rankPopS .75s cubic-bezier(.2,.9,.3,1) both}
+  @keyframes rankPop{0%{transform:scale(.15);opacity:0}55%{transform:scale(1.22);opacity:1}78%{transform:scale(.94)}100%{transform:scale(1);opacity:1}}
+  @keyframes rankPopS{0%{transform:scale(.1) rotate(-14deg);opacity:0}45%{transform:scale(1.5) rotate(5deg);opacity:1}65%{transform:scale(.9) rotate(-2deg)}82%{transform:scale(1.12)}100%{transform:scale(1) rotate(0);opacity:1}}
+  .spark{position:absolute;left:50%;top:50%;font-size:24px;line-height:1;color:#ffc42e;pointer-events:none;
+    animation:spark .9s ease-out both}
+  @keyframes spark{0%{transform:translate(-50%,-50%) scale(0);opacity:1}60%{opacity:1}100%{transform:translate(calc(-50% + var(--dx)),calc(-50% + var(--dy))) scale(1.3);opacity:0}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @media (prefers-reduced-motion:reduce){
+    #rank.pop,#rank.S.pop{animation:fadeIn .3s both}
+    .spark{display:none}
+  }
+
+  /* 緊張感：ヒビが多いと画面の縁が暗くなる */
+  #vig{position:absolute;inset:0;pointer-events:none;opacity:0;z-index:3;
+    background:radial-gradient(ellipse at center,rgba(40,0,20,0) 48%,rgba(40,0,20,.75) 100%)}
+  /* ミュート */
+  #mute{position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:20;width:44px;height:44px;
+    border-radius:50%;border:2px solid var(--line);background:#fff;font-size:22px;font-weight:900;line-height:1;
+    box-shadow:0 3px 0 var(--line);display:flex;align-items:center;justify-content:center;padding:0}
+  #mute.off{color:#b9a4ad}
+  #mute.off::after{content:"";position:absolute;width:30px;height:3px;background:#c0305c;border-radius:2px;transform:rotate(-45deg)}
   #score{font-size:34px;font-weight:900}
   .bd{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:16px;text-align:left}
   .bd b{text-align:right;font-variant-numeric:tabular-nums}
@@ -79,6 +102,7 @@
 </head>
 <body>
 <div id="app">
+  <button id="mute" type="button" aria-pressed="false" aria-label="音を消す">♪</button>
   <section class="screen" id="scTitle">
     <h1 id="ttl"></h1>
     <button class="btn" id="bStart">はじめる</button>
@@ -114,6 +138,7 @@
     </div>
     <div id="stageWrap">
       <canvas id="cv"></canvas>
+      <div id="vig"></div>
       <div id="toast"></div>
       <button class="btn sub sm" id="quit">やめる</button>
     </div>
@@ -592,6 +617,178 @@ function scoreDig(dig, shape, P) {
   return { acc, crk, spd, pa, pc, ps, base, mult, total, rank, time: dig.t, target: tg, meanD };
 }
 
+// ===== 演出の純ロジック（DOM に依存しない。verify.html からも呼ぶ）=====
+const FX = {
+  crackStep: 0.09,        // ヒビゲージがこれ増えるごとに新しいヒビが 1 本伸びる
+  crackMax: 22,           // 菓子の上のヒビの最大本数
+  heartFrom: 0.3,         // ヒビゲージがこれ以上で心音が鳴り始める
+  heartSlow: 1.15,        // 心音の間隔(秒)：鳴り始め
+  heartFast: 0.38,        // 心音の間隔(秒)：ゲージ満タン
+  vigFrom: 0.25,          // ビネットが出始めるゲージ
+  vigMax: 0.5,            // ゲージ満タン時のビネットの濃さ
+  liftSec: 0.4,           // 部品が浮き上がる時間
+  shatterAt: 0.3,         // 失敗：割れ目が走る時間（その後かけらが落ちる）
+  shakeSec: 0.3,          // 画面の揺れの長さ
+  shakePx: 8,             // 画面の揺れの大きさ(px)
+  shakePxReduced: 1.5,
+  gravity: 3.2,           // かけらの落ちる加速度（半径/秒²）
+  shards: 11,             // かけらの数
+  powder: 36,             // 部品 1 つが外れたときの粉の数
+  powderReduced: 10,
+  failMs: 1300,           // 失敗：結果画面までの時間(ms)
+  clearMs: 1000,          // 成功：結果画面までの時間(ms)
+};
+
+function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function reducedMotion() {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (_) { return false; }
+}
+
+// ---------- ヒビ（折れ線）----------
+function crackWalk(r, x, y, a, segs, segLen, jitter) {
+  const pts = [[x, y]];
+  for (let i = 0; i < segs; i++) {
+    a += (r() - 0.5) * jitter;
+    const l = segLen * (0.7 + r() * 0.6);
+    x += Math.cos(a) * l; y += Math.sin(a) * l;
+    pts.push([x, y]);
+  }
+  return { pts, a };
+}
+function newCrackSet(seed) { return { rng: rnd((seed * 7 + 13) >>> 0), items: [], burst: [], next: FX.crackStep }; }
+function spawnCrack(set, x, y, gauge) {
+  const r = set.rng;
+  const a0 = r() * 6.2832;
+  const segLen = 0.05 + gauge * 0.11;
+  const segs = 4 + Math.floor(r() * 3);
+  const main = crackWalk(r, x, y, a0, segs, segLen, 1.0);
+  const branches = [];
+  const nb = (r() < 0.55 + gauge * 0.35 ? 1 : 0) + (gauge > 0.6 && r() < 0.5 ? 1 : 0);
+  for (let b = 0; b < nb; b++) {
+    const k = 1 + Math.floor(r() * (segs - 1)), p = main.pts[k];
+    const side = r() < 0.5 ? -1 : 1;
+    branches.push(crackWalk(r, p[0], p[1], a0 + side * (0.5 + r() * 0.6), 2 + Math.floor(r() * 2), segLen * 0.7, 1.0).pts);
+  }
+  set.items.push({ pts: main.pts, branches, g0: gauge });
+}
+// ゲージが増えた分だけヒビを足す。足した本数を返す
+function crackUpdate(set, x, y, gauge) {
+  let added = 0;
+  while (gauge >= set.next && set.items.length < FX.crackMax) {
+    spawnCrack(set, x, y, gauge); set.next += FX.crackStep; added++;
+  }
+  return added;
+}
+// そのヒビがどこまで伸びたか(0..1)。新しいヒビも最初から少し見え、ゲージが増えると伸びる
+function crackGrow(it, gauge) { return clamp(0.3 + (gauge - it.g0) * 3.2, 0, 1); }
+function polyLen2(pts) { let s = 0; for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return s; }
+function crackLength(set, gauge) {
+  let s = 0;
+  for (const it of set.items) {
+    const g = crackGrow(it, gauge);
+    s += polyLen2(it.pts) * g;
+    for (const b of it.branches) s += polyLen2(b) * g;
+  }
+  return s;
+}
+// 失敗した瞬間、針の位置から割れ目が走る
+function crackBurst(set, x, y, n) {
+  const r = set.rng;
+  n = n || 7;
+  const base = r() * 6.2832;
+  set.burst = [];
+  for (let i = 0; i < n; i++) {
+    const a = base + i * 6.2832 / n + (r() - 0.5) * 0.7;
+    const m = crackWalk(r, x, y, a, 7, 0.17, 1.1);
+    const k = 2 + Math.floor(r() * 3), p = m.pts[k];
+    const br = crackWalk(r, p[0], p[1], a + (r() < 0.5 ? -1 : 1) * 0.8, 3, 0.12, 1.0);
+    set.burst.push(m.pts, br.pts);
+  }
+  return set.burst;
+}
+
+// ---------- かけら（割れた菓子を放射状の多角形に分ける）----------
+function makeShards(seed, cx, cy, n) {
+  const r = rnd((seed * 31 + 5) >>> 0);
+  n = n || FX.shards;
+  const step = 6.2832 / n, base = r() * 6.2832;
+  const rays = [];
+  for (let i = 0; i < n; i++) {
+    const a = base + i * step + (r() - 0.5) * step * 0.6;
+    const ux = Math.cos(a), uy = Math.sin(a);
+    const b = cx * ux + cy * uy, t = -b + Math.sqrt(Math.max(0, b * b + 1 - cx * cx - cy * cy));
+    const nx = -uy, ny = ux;
+    const j1 = (r() - 0.5) * 0.09, j2 = (r() - 0.5) * 0.09;
+    rays.push({
+      pts: [[cx + ux * t * 0.35 + nx * j1, cy + uy * t * 0.35 + ny * j1], [cx + ux * t * 0.7 + nx * j2, cy + uy * t * 0.7 + ny * j2], [cx + ux * t, cy + uy * t]],
+    });
+  }
+  const shards = [];
+  for (let i = 0; i < n; i++) {
+    const A = rays[i].pts, B = rays[(i + 1) % n].pts;
+    const poly = [[cx, cy], A[0], A[1], A[2]];
+    const a0 = Math.atan2(A[2][1], A[2][0]);
+    let a1 = Math.atan2(B[2][1], B[2][0]);
+    if (a1 <= a0) a1 += 6.2832;
+    for (let k = 1; k <= 3; k++) { const a = a0 + (a1 - a0) * k / 4; poly.push([Math.cos(a), Math.sin(a)]); }
+    poly.push(B[2], B[1], B[0]);
+    let mx = 0, my = 0;
+    for (const p of poly) { mx += p[0]; my += p[1]; }
+    mx /= poly.length; my /= poly.length;
+    shards.push({
+      poly, cx: mx, cy: my, area: polyArea(poly),
+      vx: mx * 0.55 + (r() - 0.5) * 0.5, vy: -0.15 - r() * 0.55, w: (r() - 0.5) * 6,
+    });
+  }
+  return shards;
+}
+function shardPos(s, t) { return { dx: s.vx * t, dy: s.vy * t + 0.5 * FX.gravity * t * t, rot: s.w * t }; }
+
+// ---------- 粉 ----------
+function spawnPowder(seed, src, n) {
+  const r = rnd((seed * 17 + 3) >>> 0), out = [];
+  if (!src || !src.length) return out;
+  for (let i = 0; i < n; i++) {
+    const p = src[Math.floor(r() * src.length)];
+    out.push({ x: p[0], y: p[1], vx: (r() - 0.5) * 0.5, vy: -(0.12 + r() * 0.5), life: 0.6 + r() * 0.6, age: 0, size: 0.005 + r() * 0.011, c: r() < 0.5 ? 0 : 1 });
+  }
+  return out;
+}
+function stepPowder(list, dt) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
+    p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.7 * dt;
+    if (p.age >= p.life) list.splice(i, 1);
+  }
+}
+
+// ---------- 緊張感 ----------
+// 心音の間隔(秒)。ヒビが少ないうちは null（鳴らさない）
+function heartInterval(crack) {
+  if (!(crack >= FX.heartFrom)) return null;
+  const t = clamp((crack - FX.heartFrom) / (1 - FX.heartFrom), 0, 1);
+  return FX.heartSlow + (FX.heartFast - FX.heartSlow) * t;
+}
+function vignetteAlpha(crack) {
+  if (!(crack > FX.vigFrom)) return 0;
+  return clamp((crack - FX.vigFrom) / (1 - FX.vigFrom), 0, 1) * FX.vigMax;
+}
+// 部品の浮き上がり具合 0..1（なめらかに減速）
+function liftAmount(t) {
+  if (!(t > 0)) return 0;
+  if (t >= FX.liftSec) return 1;
+  const u = 1 - t / FX.liftSec;
+  return 1 - u * u * u;
+}
+// 失敗からの経過秒 el での画面の揺れの大きさ(px)
+function shakeAmp(el, reduced) {
+  if (!(el >= 0) || el >= FX.shakeSec) return 0;
+  return (reduced ? FX.shakePxReduced : FX.shakePx) * (1 - el / FX.shakeSec);
+}
+function newFx(seed) {
+  return { cracks: newCrackSet(seed), powder: [], partT: [], failT: -1, shards: null, snap: null, beatAt: 0, lastMove: 0 };
+}
+
 // ===== 文字 → 型（キャンバスに描いて読み取る。verify.html でも使う）=====
 const GLYPH = { cache: new Map(), refs: null, canvas: null };
 
@@ -682,17 +879,21 @@ async function makeShape(ch) {
   return makeShapeSync(ch);
 }
 
-// ===== 描画（砂糖菓子・溝・針）=====
+// ===== 描画（砂糖菓子・溝・針・演出）=====
 const CANDY = [
-  { fill: '#ffc6da', rim: '#eb97b5', hi: '#ffe9f1', groove: 'rgba(150,60,100,.55)', cutc: '#fffafc' },
-  { fill: '#bfe2ff', rim: '#8cbfe8', hi: '#e6f4ff', groove: 'rgba(50,90,150,.5)', cutc: '#fbfdff' },
-  { fill: '#fff0a6', rim: '#e8cf6a', hi: '#fffadc', groove: 'rgba(150,115,30,.5)', cutc: '#fffef6' },
+  { fill: '#ffc6da', rim: '#eb97b5', hi: '#ffe9f1', groove: 'rgba(150,60,100,.55)', cutc: '#fffafc', tint: '120,50,85' },
+  { fill: '#bfe2ff', rim: '#8cbfe8', hi: '#e6f4ff', groove: 'rgba(50,90,150,.5)', cutc: '#fbfdff', tint: '40,70,125' },
+  { fill: '#fff0a6', rim: '#e8cf6a', hi: '#fffadc', groove: 'rgba(150,115,30,.5)', cutc: '#fffef6', tint: '130,100,25' },
+  { fill: '#c6f0d8', rim: '#8fd1ae', hi: '#eafaf1', groove: 'rgba(40,120,85,.5)', cutc: '#fbfffd', tint: '35,100,70' },
+  { fill: '#e0cdf7', rim: '#b79ee0', hi: '#f4ecff', groove: 'rgba(100,70,160,.5)', cutc: '#fdfaff', tint: '85,55,140' },
+  { fill: '#ffd9bf', rim: '#eeb08a', hi: '#fff0e4', groove: 'rgba(160,90,45,.5)', cutc: '#fffaf5', tint: '140,75,35' },
 ];
 const G = {
   session: null, shape: null, dig: null, P: null, color: CANDY[0], char: '',
   needle: { x: 0, y: 0, vis: false }, touch: false,
   over: false, view: { w: 300, h: 300, cx: 150, cy: 150, R: 140, dpr: 1 },
   failAt: 0, seed: 1, anim: 0,
+  tex: null, paths: null, fx: null,
 };
 
 function loopPath(ctx, l) {
@@ -701,31 +902,122 @@ function loopPath(ctx, l) {
   for (let i = 1; i < n; i++) ctx.lineTo(p[2 * i], p[2 * i + 1]);
   ctx.closePath();
 }
-function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 
-function drawGame(ctx) {
-  const v = G.view;
-  ctx.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
-  ctx.clearRect(0, 0, v.w, v.h);
-  if (!G.shape || !G.dig) return;
-  const dig = G.dig, P = G.P, col = G.color, shape = G.shape;
-  ctx.save();
-  ctx.translate(v.cx, v.cy);
-  ctx.scale(v.R, v.R);
-  // 影・板
-  ctx.beginPath(); ctx.arc(0.02, 0.045, 1, 0, 6.2832); ctx.fillStyle = 'rgba(90,40,60,.18)'; ctx.fill();
-  const g = ctx.createRadialGradient(-0.3, -0.35, 0.1, 0, 0, 1.05);
+// 砂糖菓子の質感を 1 枚のキャンバスに焼く（菓子ごとに 1 回。毎フレームは drawImage だけ）
+// 座標は「半径 = 1」で、-1.08..1.08 を 1 枚に収める
+const TEX_SPAN = 1.08;
+function bakeCandy(col, seed, R, dpr) {
+  const px = Math.min(900, Math.max(160, Math.round(2 * TEX_SPAN * R * dpr)));
+  const c = document.createElement('canvas');
+  c.width = c.height = px;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  const u = px / (2 * TEX_SPAN);
+  x.translate(px / 2, px / 2); x.scale(u, u);
+  const r = rnd((seed ^ 0x9e3779b9) >>> 0);
+  const TAU = 6.2832;
+  x.save();
+  x.beginPath(); x.arc(0, 0, 1, 0, TAU); x.clip();
+  // 下地
+  const g = x.createRadialGradient(-0.3, -0.35, 0.1, 0, 0, 1.05);
   g.addColorStop(0, col.hi); g.addColorStop(1, col.fill);
-  ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.2832); ctx.fillStyle = g; ctx.fill();
-  ctx.lineWidth = 0.035; ctx.strokeStyle = col.rim; ctx.stroke();
-  // 溝
+  x.fillStyle = g; x.fillRect(-1.1, -1.1, 2.2, 2.2);
+  // ほんのりした凹凸（大きなやわらかい明暗）
+  for (let k = 0; k < 16; k++) {
+    const a = r() * TAU, d = Math.sqrt(r()) * 0.9, bx = Math.cos(a) * d, by = Math.sin(a) * d, br = 0.18 + r() * 0.3;
+    const lg = x.createRadialGradient(bx, by, 0, bx, by, br);
+    const light = k % 2 === 0;
+    lg.addColorStop(0, light ? 'rgba(255,255,255,.26)' : 'rgba(' + col.tint + ',.10)');
+    lg.addColorStop(1, light ? 'rgba(255,255,255,0)' : 'rgba(' + col.tint + ',0)');
+    x.fillStyle = lg; x.fillRect(bx - br, by - br, br * 2, br * 2);
+  }
+  // 粒（砂糖のつぶ）
+  const nDot = Math.min(2400, Math.round(R * dpr * 6));
+  for (let k = 0; k < nDot; k++) {
+    const a = r() * TAU, d = Math.sqrt(r()) * 1.0, sx = Math.cos(a) * d, sy = Math.sin(a) * d;
+    const rad = 0.003 + r() * 0.0065;
+    x.fillStyle = r() < 0.55 ? 'rgba(255,255,255,.65)' : 'rgba(' + col.tint + ',.22)';
+    x.beginPath(); x.arc(sx, sy, rad, 0, TAU); x.fill();
+  }
+  x.restore();
+  // 縁の厚み（外の輪、明るい面取り、影側の面取り）
+  x.lineWidth = 0.05; x.strokeStyle = col.rim;
+  x.beginPath(); x.arc(0, 0, 0.975, 0, TAU); x.stroke();
+  const lgA = x.createLinearGradient(-0.7, -0.7, 0.7, 0.7);
+  lgA.addColorStop(0, 'rgba(255,255,255,.95)'); lgA.addColorStop(0.6, 'rgba(255,255,255,0)');
+  x.lineWidth = 0.022; x.strokeStyle = lgA;
+  x.beginPath(); x.arc(0, 0, 0.94, 0, TAU); x.stroke();
+  const lgB = x.createLinearGradient(-0.7, -0.7, 0.7, 0.7);
+  lgB.addColorStop(0.4, 'rgba(' + col.tint + ',0)'); lgB.addColorStop(1, 'rgba(' + col.tint + ',.5)');
+  x.lineWidth = 0.024; x.strokeStyle = lgB;
+  x.beginPath(); x.arc(0, 0, 0.99, 0, TAU); x.stroke();
+  // ざらつき（細かい明暗ノイズ。縁の外の透明部分は触らない）
+  const im = x.getImageData(0, 0, px, px), d = im.data;
+  let s = ((seed * 2654435761) >>> 0) || 1;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    s = (s * 1664525 + 1013904223) >>> 0;
+    const n = ((s >>> 24) - 128) * 0.15;
+    d[i] += n; d[i + 1] += n; d[i + 2] += n;
+  }
+  x.putImageData(im, 0, 0);
+  return c;
+}
+
+// 型の各部品の輪郭を Path2D にしておく
+function buildPaths(shape) {
+  return shape.parts.map(part => {
+    const p = new Path2D();
+    for (const l of part.loops) loopPath(p, l);
+    return p;
+  });
+}
+
+// 折れ線を、全長の frac だけ描く（ヒビが伸びる表示）
+function tracePoly(ctx, pts, frac) {
+  if (frac <= 0 || pts.length < 2) return;
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  let left = total * Math.min(1, frac);
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length && left > 0; i++) {
+    const a = pts[i - 1], b = pts[i], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l <= left) { ctx.lineTo(b[0], b[1]); left -= l; }
+    else { const k = left / l; ctx.lineTo(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k); left = 0; }
+  }
+}
+function drawCrackLines(ctx, lines) {
+  // lines: [{pts, frac}]
+  if (!lines.length) return;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.save();
+  ctx.translate(0.005, 0.005);
+  ctx.beginPath(); for (const L of lines) tracePoly(ctx, L.pts, L.frac);
+  ctx.lineWidth = 0.011; ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.stroke();
+  ctx.restore();
+  ctx.beginPath(); for (const L of lines) tracePoly(ctx, L.pts, L.frac);
+  ctx.lineWidth = 0.0075; ctx.strokeStyle = 'rgba(70,25,45,.9)'; ctx.stroke();
+}
+
+// 砂糖菓子の本体（板・溝・外れた部品・ヒビ）。単位空間（半径 = 1）で描く
+function drawBody(ctx, now) {
+  const dig = G.dig, P = G.P, col = G.color, shape = G.shape, fx = G.fx;
+  const dpr = G.view.dpr;
+  ctx.drawImage(G.tex, -TEX_SPAN, -TEX_SPAN, TEX_SPAN * 2, TEX_SPAN * 2);
+  // 溝（影・ハイライト・本体）
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   const gw = P.safe * 2;
   shape.parts.forEach((part, pi) => {
     if (dig.partDone[pi]) return;
-    ctx.beginPath();
-    for (const l of part.loops) loopPath(ctx, l);
-    ctx.lineWidth = gw; ctx.strokeStyle = col.groove; ctx.stroke();
+    const path = G.paths[pi];
+    ctx.save();
+    ctx.translate(0.011, 0.011);
+    ctx.lineWidth = gw * 0.95; ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.stroke(path);   // 下側の縁に光
+    ctx.restore();
+    ctx.lineWidth = gw; ctx.strokeStyle = col.groove; ctx.stroke(path);
+    ctx.save();
+    ctx.translate(-0.004, -0.004);
+    ctx.lineWidth = gw * 0.5; ctx.strokeStyle = 'rgba(' + col.tint + ',.28)'; ctx.stroke(path); // 上側の壁の影
+    ctx.restore();
     // 切れた溝（明るく）
     ctx.beginPath();
     for (const l of part.loops) {
@@ -737,38 +1029,124 @@ function drawGame(ctx) {
     }
     ctx.lineWidth = gw * 0.78; ctx.strokeStyle = col.cutc; ctx.stroke();
   });
-  // 外れた部品（浮かせて表示）
+  // 外れた部品（少し浮いて持ち上がる）
+  const reduced = reducedMotion();
   shape.parts.forEach((part, pi) => {
     if (!dig.partDone[pi]) return;
+    const path = G.paths[pi];
+    const el = now - (fx.partT[pi] === undefined ? -9 : fx.partT[pi]);
+    const lift = liftAmount(el);
+    const hover = (lift >= 1 && !reduced) ? Math.sin(el * 3.2) * 0.004 : 0;
+    // 抜けたあとの穴
+    ctx.fillStyle = 'rgba(' + col.tint + ',.32)'; ctx.fill(path, 'evenodd');
     ctx.save();
-    ctx.translate(-0.015, -0.025);
-    ctx.shadowColor = 'rgba(90,40,60,.45)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4;
-    ctx.beginPath();
-    for (const l of part.loops) loopPath(ctx, l);
-    ctx.fillStyle = col.hi; ctx.fill('evenodd');
-    ctx.shadowColor = 'transparent';
-    ctx.lineWidth = 0.012; ctx.strokeStyle = col.rim; ctx.stroke();
+    ctx.translate(-0.035 * lift, -0.055 * lift - hover);
+    ctx.scale(1 + 0.025 * lift, 1 + 0.025 * lift);
+    ctx.shadowColor = 'rgba(90,40,60,.45)'; ctx.shadowBlur = (4 + 10 * lift) * dpr; ctx.shadowOffsetY = (2 + 6 * lift) * dpr;
+    ctx.fillStyle = col.hi; ctx.fill(path, 'evenodd');
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.save();
+    ctx.clip(path, 'evenodd');
+    ctx.drawImage(G.tex, -TEX_SPAN, -TEX_SPAN, TEX_SPAN * 2, TEX_SPAN * 2);
+    ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.fillRect(-1.1, -1.1, 2.2, 2.2);
+    ctx.restore();
+    ctx.lineWidth = 0.012; ctx.strokeStyle = col.rim; ctx.stroke(path);
     ctx.restore();
   });
-  // 切り残しのヒント
-  const hints = (G.over || dig.failed || dig.cleared) ? [] : dig.hints();
-  if (hints.length) {
-    const a = 0.5 + 0.35 * Math.sin(G.anim * 7);
-    ctx.fillStyle = 'rgba(255,215,0,' + a.toFixed(2) + ')';
-    ctx.beginPath();
-    for (const h of hints) { ctx.moveTo(h[0] + 0.03, h[1]); ctx.arc(h[0], h[1], 0.03, 0, 6.2832); }
-    ctx.fill();
+  // ヒビ（ゲージに応じて本数と長さが増える）＋失敗時の割れ目
+  const lines = [];
+  for (const it of fx.cracks.items) {
+    const f = crackGrow(it, dig.crack);
+    lines.push({ pts: it.pts, frac: f });
+    for (const b of it.branches) lines.push({ pts: b, frac: f });
   }
-  // 割れた表示
-  if (dig.failed && dig.failPos) {
-    const rr = rnd(G.seed), fp = dig.failPos;
-    ctx.strokeStyle = '#4a1d2e'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (let k = 0; k < 9; k++) {
-      let x = fp.x, y = fp.y, a = rr() * 6.2832;
-      ctx.lineWidth = 0.014; ctx.beginPath(); ctx.moveTo(x, y);
-      for (let s = 0; s < 7; s++) { a += (rr() - 0.5) * 1.1; x += Math.cos(a) * 0.13; y += Math.sin(a) * 0.13; ctx.lineTo(x, y); }
-      ctx.stroke();
+  if (fx.failT >= 0) {
+    const f = clamp((now - fx.failT) / FX.shatterAt, 0, 1);
+    for (const b of fx.cracks.burst) lines.push({ pts: b, frac: f });
+  }
+  drawCrackLines(ctx, lines);
+}
+
+// 割れた瞬間の絵を 1 枚に撮って、かけら（多角形）に分ける
+function buildShatter(now) {
+  const fx = G.fx, fp = G.dig.failPos || { x: 0, y: 0 };
+  const px = G.tex.width;
+  const c = document.createElement('canvas');
+  c.width = c.height = px;
+  const x = c.getContext('2d');
+  const u = px / (2 * TEX_SPAN);
+  x.translate(px / 2, px / 2); x.scale(u, u);
+  drawBody(x, now);
+  fx.snap = c;
+  const cx = clamp(fp.x, -0.7, 0.7), cy = clamp(fp.y, -0.7, 0.7);
+  fx.shards = makeShards(G.seed, cx, cy, FX.shards);
+}
+
+function drawGame(ctx) {
+  const v = G.view;
+  ctx.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+  ctx.clearRect(0, 0, v.w, v.h);
+  if (!G.shape || !G.dig || !G.tex || !G.fx) return;
+  const dig = G.dig, P = G.P, fx = G.fx, now = G.anim;
+  const failEl = fx.failT >= 0 ? now - fx.failT : -1;
+  // 画面の揺れ（割れた直後の短い間）
+  const amp = shakeAmp(failEl, reducedMotion());
+  if (amp > 0) {
+    const sx = (Math.random() - 0.5) * 2 * amp, sy = (Math.random() - 0.5) * 2 * amp;
+    ctx.setTransform(v.dpr, 0, 0, v.dpr, sx * v.dpr, sy * v.dpr);
+  }
+  ctx.save();
+  ctx.translate(v.cx, v.cy);
+  ctx.scale(v.R, v.R);
+  if (fx.failT >= 0 && failEl >= FX.shatterAt) {
+    // かけらが回転しながら落ちる
+    if (!fx.shards) buildShatter(now);
+    const t = failEl - FX.shatterAt;
+    const alpha = clamp(1 - (t - 0.75) / 0.45, 0, 1);
+    ctx.globalAlpha = alpha;
+    for (const s of fx.shards) {
+      const q = shardPos(s, t);
+      ctx.save();
+      ctx.translate(s.cx + q.dx, s.cy + q.dy);
+      ctx.rotate(q.rot);
+      ctx.translate(-s.cx, -s.cy);
+      ctx.beginPath();
+      ctx.moveTo(s.poly[0][0], s.poly[0][1]);
+      for (let i = 1; i < s.poly.length; i++) ctx.lineTo(s.poly[i][0], s.poly[i][1]);
+      ctx.closePath();
+      ctx.shadowColor = 'rgba(90,40,60,.35)'; ctx.shadowBlur = 5 * v.dpr; ctx.shadowOffsetY = 2 * v.dpr;
+      ctx.fillStyle = G.color.fill; ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.clip();
+      ctx.drawImage(fx.snap, -TEX_SPAN, -TEX_SPAN, TEX_SPAN * 2, TEX_SPAN * 2);
+      ctx.restore();
     }
+    ctx.globalAlpha = 1;
+  } else {
+    // 影
+    ctx.beginPath(); ctx.arc(0.02, 0.045, 1, 0, 6.2832); ctx.fillStyle = 'rgba(90,40,60,.18)'; ctx.fill();
+    drawBody(ctx, now);
+    // 切り残しのヒント
+    const hints = (G.over || dig.failed || dig.cleared) ? [] : dig.hints();
+    if (hints.length) {
+      const a = 0.5 + 0.35 * Math.sin(G.anim * 7);
+      ctx.fillStyle = 'rgba(255,215,0,' + a.toFixed(2) + ')';
+      ctx.beginPath();
+      for (const h of hints) { ctx.moveTo(h[0] + 0.03, h[1]); ctx.arc(h[0], h[1], 0.03, 0, 6.2832); }
+      ctx.fill();
+    }
+  }
+  // 粉
+  if (fx.powder.length) {
+    const col = G.color;
+    for (let c = 0; c < 2; c++) {
+      ctx.beginPath();
+      for (const p of fx.powder) if (p.c === c) { ctx.moveTo(p.x + p.size, p.y); ctx.arc(p.x, p.y, p.size, 0, 6.2832); }
+      ctx.fillStyle = c === 0 ? 'rgba(255,255,255,.85)' : col.hi;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
   ctx.restore();
   // 針（px 座標）
@@ -791,6 +1169,130 @@ function drawGame(ctx) {
     ctx.restore();
   }
 }
+
+// ===== 効果音（WebAudio で生成。外部素材なし）=====
+const MUTE_KEY = 'mojiKatanuki.mute';
+function loadMuted(st) { try { return !!st && st.getItem(MUTE_KEY) === '1'; } catch (_) { return false; } }
+function saveMuted(st, v) { try { if (!st) return false; st.setItem(MUTE_KEY, v ? '1' : '0'); return true; } catch (_) { return false; } }
+function getStorage() { try { return window.localStorage || null; } catch (_) { return null; } }
+
+const SFX = {
+  ctx: null, master: null, noiseBuf: null, scr: null,
+  muted: loadMuted(getStorage()),
+  // 最初のユーザー操作で呼ぶ（何度呼んでもよい）
+  unlock() {
+    try {
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.9;
+        this.master.connect(this.ctx.destination);
+        const n = this.ctx.sampleRate * 2, b = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = b.getChannelData(0);
+        for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+        this.noiseBuf = b;
+      }
+      if (this.ctx.state === 'suspended') { const p = this.ctx.resume(); if (p && p.catch) p.catch(() => { }); }
+    } catch (_) { this.ctx = null; }
+  },
+  setMuted(v) {
+    this.muted = !!v;
+    saveMuted(getStorage(), this.muted);
+    if (this.master) { try { this.master.gain.setTargetAtTime(this.muted ? 0 : 0.9, this.ctx.currentTime, 0.02); } catch (_) { } }
+    if (this.muted) this.scrapeStop();
+  },
+  on() { return !!(this.ctx && !this.muted && this.ctx.state === 'running'); },
+  tone(f0, f1, t0, dur, vol, type) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.01, dur / 3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  },
+  noise(t0, dur, vol, type, f0, f1, q) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf;
+    f.type = type; f.Q.value = q || 0.8;
+    f.frequency.setValueAtTime(f0, t0);
+    if (f1) f.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.008, dur / 3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start(t0, Math.random() * 1.5); s.stop(t0 + dur + 0.02);
+  },
+  // 削る音：動かしている間だけ鳴るノイズ。速さで高さと大きさが変わる
+  scrapeStart() {
+    if (!this.on() || this.scr) return;
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf; s.loop = true;
+    f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.2;
+    g.gain.value = 0;
+    s.connect(f); f.connect(g); g.connect(this.master);
+    s.start();
+    this.scr = { s, f, g };
+  },
+  // ratio: 速さ / 速度上限（0 で止まっている）。edge: フチ（ヒビが入っている）か
+  scrapeSet(ratio, edge) {
+    const r = this.scr;
+    if (!r || !this.ctx) return;
+    const k = clamp(ratio, 0, 1.4), t = this.ctx.currentTime;
+    const vol = k < 0.02 ? 0 : (0.02 + 0.07 * Math.min(1, k)) * (edge ? 1.5 : 1);
+    r.g.gain.setTargetAtTime(vol, t, 0.03);
+    r.f.frequency.setTargetAtTime(650 + 1700 * k + (edge ? 600 : 0), t, 0.04);
+    r.f.Q.setTargetAtTime(edge ? 3 : 1.2, t, 0.05);
+  },
+  scrapeStop() {
+    const r = this.scr;
+    if (!r) return;
+    this.scr = null;
+    try {
+      r.g.gain.setTargetAtTime(0, this.ctx.currentTime, 0.02);
+      r.s.stop(this.ctx.currentTime + 0.15);
+    } catch (_) { }
+  },
+  crack() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.06, 0.28, 'highpass', 3200, 5000, 0.7);
+    this.tone(2100, 900, t, 0.06, 0.1, 'triangle');
+  },
+  shatter() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.scrapeStop();
+    this.noise(t, 0.5, 0.55, 'lowpass', 7000, 500, 0.7);
+    this.tone(170, 48, t, 0.3, 0.55, 'sine');
+    for (let i = 0; i < 7; i++) this.noise(t + 0.03 + Math.random() * 0.4, 0.04, 0.22, 'highpass', 2500 + Math.random() * 3000, null, 0.8);
+  },
+  part() {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    this.tone(440, 880, t, 0.13, 0.22, 'sine');
+    this.tone(660, 1320, t + 0.05, 0.14, 0.15, 'sine');
+    this.noise(t, 0.18, 0.1, 'bandpass', 2600, 1800, 1);
+  },
+  rank(rank) {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime;
+    const seq = { S: [523, 659, 784, 1047], A: [392, 523, 659], B: [392, 523], C: [330] }[rank];
+    if (!seq) return;
+    seq.forEach((f, i) => this.tone(f, f, t + i * 0.11, 0.28, 0.2, 'triangle'));
+    if (rank === 'S') for (let i = 0; i < 4; i++) this.tone(2093 + i * 260, 2093 + i * 260, t + 0.45 + i * 0.07, 0.18, 0.07, 'sine');
+  },
+  // 心音。strength: 0..1（ヒビが多いほど強く）
+  heart(strength) {
+    if (!this.on()) return;
+    const t = this.ctx.currentTime, v = 0.22 + 0.4 * clamp(strength, 0, 1);
+    this.tone(78, 42, t, 0.14, v, 'sine');
+    this.tone(70, 40, t + 0.17, 0.14, v * 0.7, 'sine');
+  },
+};
 
 // ===== 画面・操作・進行 =====
 const $ = id => document.getElementById(id);
@@ -828,7 +1330,13 @@ function layout() {
   const v = G.view;
   v.w = w; v.h = h; v.cx = w / 2; v.cy = h / 2; v.R = Math.min(w, h) / 2 * 0.95; v.dpr = dpr;
 }
-window.addEventListener('resize', () => { if (G.screen === 'scGame') layout(); });
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  if (G.screen !== 'scGame') return;
+  layout();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (G.shape && G.color && G.fx && G.screen === 'scGame') { G.tex = bakeCandy(G.color, G.seed, G.view.R, G.view.dpr); G.fx.shards = null; } }, 150);
+});
 
 // ---------- ランダム選び ----------
 function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
@@ -882,6 +1390,10 @@ async function beginChar(res) {
   G.color = CANDY[Math.floor(Math.random() * CANDY.length)];
   G.seed = (Math.random() * 1e9) | 0;
   G.over = false; G.needle.vis = false; G.touch = false;
+  G.paths = buildPaths(G.shape);
+  G.fx = newFx(G.seed);
+  G.tex = bakeCandy(G.color, G.seed, G.view.R, G.view.dpr);
+  SFX.scrapeStop();
   const total = S.chars.length;
   setPh($('hCh'), (total > 1 ? (S.idx + 1) + '/' + total + '|' : '') + '「' + G.char + '」');
   $('hStars').textContent = stars(G.shape.stars);
@@ -893,15 +1405,29 @@ async function beginChar(res) {
 function handleEvents(evs) {
   if (!evs) return;
   for (const e of evs) {
-    if (e.type === 'part') toast(G.shape.nParts > 1 ? '部品が外れた！' : '外れた！', false, 900);
-    else if (e.type === 'clear' && !G.over) {
+    if (e.type === 'part') {
+      toast(G.shape.nParts > 1 ? '部品が外れた！' : '外れた！', false, 900);
+      G.fx.partT[e.index] = G.anim;
+      const src = [];
+      for (const l of G.shape.parts[e.index].loops) for (let i = 0; i < l.n; i += 2) src.push([l.pts[2 * i], l.pts[2 * i + 1]]);
+      const n = reducedMotion() ? FX.powderReduced : FX.powder;
+      G.fx.powder.push(...spawnPowder(G.seed + e.index * 101 + G.fx.powder.length, src, n));
+      SFX.scrapeStop();
+      SFX.part();
+    }
+    if (e.type === 'clear' && !G.over) {
       G.over = true;
+      SFX.scrapeStop();
       toast('抜けた！', false, 900);
-      setTimeout(() => showResult(true), 800);
+      setTimeout(() => showResult(true), FX.clearMs);
     } else if (e.type === 'fail' && !G.over) {
       G.over = true;
+      const fp = G.dig.failPos || { x: G.needle.x, y: G.needle.y };
+      G.fx.failT = G.anim;
+      crackBurst(G.fx.cracks, fp.x, fp.y, 7);
+      SFX.shatter();
       toast(e.why === 'out' ? '割れた！|溝の外に出た' : '割れた！|ヒビが満タン', true, 1500);
-      setTimeout(() => showResult(false), 1100);
+      setTimeout(() => showResult(false), FX.failMs);
     }
   }
 }
@@ -916,8 +1442,12 @@ function showResult(ok) {
   $('rChips').innerHTML = '';
   setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
   const rk = $('rank');
+  rk.className = ''; rk.textContent = '';
+  void rk.offsetWidth;                       // アニメーションをやり直す
   if (ok) {
-    rk.className = sc.rank; rk.textContent = sc.rank;
+    rk.className = sc.rank + ' pop'; rk.textContent = sc.rank;
+    if (sc.rank === 'S') addSparks(rk);
+    SFX.rank(sc.rank);
     $('score').textContent = sc.total + ' 点';
     $('rBd').innerHTML =
       '<span>ていねいさ</span><b>' + sc.pa + ' / ' + CFG.score.wAccuracy + '</b>' +
@@ -926,7 +1456,7 @@ function showResult(ok) {
       '<span>難しさ ' + stars(G.shape.stars) + '</span><b>× ' + sc.mult.toFixed(1) + '</b>';
     $('rMsg').textContent = '';
   } else {
-    rk.className = 'fail'; rk.textContent = '割れた';
+    rk.className = 'fail pop'; rk.textContent = '割れた';
     $('score').textContent = '0 点';
     $('rBd').innerHTML = '';
     setPh($('rMsg'), dig.failWhy === 'out' ? '溝の外に|出てしまいました' : 'ヒビが|入りすぎました');
@@ -938,6 +1468,18 @@ function showResult(ok) {
   else if (!last) add('次の文字', () => { S.idx++; beginChar(); });
   else add('結果を見る', showSummary);
   add('文字を選ぶ', toSelect, true);
+}
+
+function addSparks(rk) {
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * 6.2832 + 0.3, d = 70 + (i % 3) * 22;
+    const sp = document.createElement('span');
+    sp.className = 'spark'; sp.textContent = '✦';
+    sp.style.setProperty('--dx', Math.round(Math.cos(a) * d) + 'px');
+    sp.style.setProperty('--dy', Math.round(Math.sin(a) * d) + 'px');
+    sp.style.animationDelay = (0.12 + (i % 4) * 0.05) + 's';
+    rk.appendChild(sp);
+  }
 }
 
 function showSummary() {
@@ -971,7 +1513,14 @@ function setNeedle(e) {
   G.needle.x = (px - v.cx) / v.R; G.needle.y = (py - v.cy) / v.R; G.needle.vis = true;
 }
 let lastT = 0;
-function act(evs) { handleEvents(evs); updateGauge(); }
+function act(evs) {
+  handleEvents(evs);
+  updateGauge();
+  const d = G.dig;
+  if (d && G.fx && !d.failed && !d.cleared) {
+    if (crackUpdate(G.fx.cracks, G.needle.x, G.needle.y, d.crack) > 0) SFX.crack();
+  }
+}
 function updateGauge() { if (G.dig) $('gauge').firstElementChild.style.width = Math.round(G.dig.crack * 100) + '%'; }
 
 cv.addEventListener('pointerdown', e => {
@@ -983,7 +1532,7 @@ cv.addEventListener('pointerdown', e => {
   const r = G.dig.press(G.needle.x, G.needle.y);
   lastT = e.timeStamp;
   if (!r.ok) toast('ここには刺せない', true, 900);
-  else act(r.events);
+  else { SFX.scrapeStart(); SFX.scrapeSet(0, false); act(r.events); }
 });
 cv.addEventListener('pointermove', e => {
   e.preventDefault();
@@ -993,11 +1542,14 @@ cv.addEventListener('pointermove', e => {
     if (G.dig && G.dig.down && !G.over) {
       const dt = clamp((ev.timeStamp - lastT) / 1000, 1 / 240, 0.1);
       lastT = ev.timeStamp;
+      const before = G.dig.crack;
       act(G.dig.move(G.needle.x, G.needle.y, dt));
+      if (G.fx) G.fx.lastMove = G.anim;
+      if (G.dig.down) SFX.scrapeSet(G.dig.ema / G.P.speedLimit, G.dig.crack > before);
     }
   }
 });
-const lift = e => { if (G.dig) G.dig.release(); if (G.touch) G.needle.vis = false; };
+const lift = e => { if (G.dig) G.dig.release(); if (G.touch) G.needle.vis = false; SFX.scrapeStop(); };
 cv.addEventListener('pointerup', lift);
 cv.addEventListener('pointercancel', lift);
 cv.addEventListener('pointerleave', e => { if (!G.touch && !(G.dig && G.dig.down)) G.needle.vis = false; });
@@ -1010,9 +1562,27 @@ $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-$('quit').addEventListener('click', toSelect);
+$('quit').addEventListener('click', () => { SFX.scrapeStop(); toSelect(); });
+
+// ---------- 音（最初の操作で有効化。♪ でミュート）----------
+['pointerdown', 'touchend', 'click', 'keydown'].forEach(n => document.addEventListener(n, () => SFX.unlock(), { capture: true }));
+function syncMuteBtn() {
+  const b = $('mute');
+  b.classList.toggle('off', SFX.muted);
+  b.setAttribute('aria-pressed', SFX.muted ? 'true' : 'false');
+  b.setAttribute('aria-label', SFX.muted ? '音を出す' : '音を消す');
+}
+$('mute').addEventListener('click', () => { SFX.unlock(); SFX.setMuted(!SFX.muted); syncMuteBtn(); });
+syncMuteBtn();
 
 // ---------- 描画ループ ----------
+let vigShown = -1;
+function setVignette(a) {
+  const o = a <= 0 ? 0 : Math.min(1, a / FX.vigMax * 0.8);
+  if (Math.abs(o - vigShown) < 0.01 && !(o === 0 && vigShown !== 0)) return;
+  vigShown = o;
+  $('vig').style.opacity = o.toFixed(2);
+}
 let prevT = 0;
 function frame(t) {
   const dt = Math.min(0.1, (t - prevT) / 1000 || 0); prevT = t;
@@ -1022,8 +1592,22 @@ function frame(t) {
       G.dig.t += dt;
       $('hTime').textContent = G.dig.t.toFixed(1) + ' 秒';
     }
+    if (G.fx) {
+      stepPowder(G.fx.powder, dt);
+      // 針が止まっていたら削る音を消す
+      if (G.dig.down && G.anim - G.fx.lastMove > 0.09) SFX.scrapeSet(0, false);
+      // 緊張感：ヒビが多いと縁が暗くなり、心音が速くなる
+      const live = G.dig.started && !G.over && !G.dig.failed && !G.dig.cleared;
+      const cr = live ? G.dig.crack : 0;
+      setVignette(vignetteAlpha(cr));
+      const hi = live ? heartInterval(cr) : null;
+      if (hi !== null && G.anim >= G.fx.beatAt) {
+        SFX.heart((cr - FX.heartFrom) / (1 - FX.heartFrom));
+        G.fx.beatAt = G.anim + hi;
+      }
+    }
     drawGame(cx2d);
-  }
+  } else setVignette(0);
   requestAnimationFrame(frame);
 }
 
