@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>文字型抜き</title>
+<meta name="description" content="砂糖菓子に刻まれた文字を、割らないように針で切り抜くゲーム。">
+<meta name="theme-color" content="#fff4ee">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Ccircle cx=%2732%27 cy=%2732%27 r=%2730%27 fill=%27%23ffc9dc%27/%3E%3Cpath d=%27M20 22h24v20H20z%27 fill=%27none%27 stroke=%27%23a8506f%27 stroke-width=%275%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@800;900&family=Zen+Maru+Gothic:wght@900&display=swap">
+<style>
+  :root{--ink:#5a3a48;--bg:#fff4ee;--pink:#ff8fb1;--pinkd:#e0608a;--card:#ffffff;--line:#f0cdd8;
+    --jp:"M PLUS Rounded 1c","Zen Maru Gothic","Hiragino Maru Gothic ProN","Yu Gothic UI","Meiryo",sans-serif}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--jp);
+    touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+  html,body{height:100vh;height:100dvh}
+  /* 画面の文章は文節の途中で改行しない。短いラベルは折り返さない */
+  body{word-break:auto-phrase;line-break:strict;overflow-wrap:anywhere}
+  h1,h2,p,.msg{text-wrap:balance}
+  .ph{display:inline-block}
+  button,.tag,.chip,.nw{white-space:nowrap}
+  button{font-family:var(--jp);cursor:pointer;touch-action:manipulation;color:var(--ink)}
+  input{font-family:var(--jp);font-size:20px}
+
+  /* 画面 */
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:safe center;
+    gap:14px;padding:20px 16px;overflow:auto;touch-action:pan-y;text-align:center}
+  .screen.on{display:flex}
+  #scTitle h1{font-size:clamp(40px,12vw,76px);letter-spacing:.08em;line-height:1.2}
+  #scTitle p{font-size:15px;opacity:.7}
+  .btn{border:0;border-radius:999px;padding:12px 28px;font-size:20px;font-weight:900;background:var(--pink);color:#fff;
+    box-shadow:0 4px 0 var(--pinkd);min-width:150px}
+  .btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--pinkd)}
+  .btn.sub{background:#fff;color:var(--ink);box-shadow:0 4px 0 var(--line);border:2px solid var(--line)}
+  .btn.sm{font-size:15px;padding:8px 18px;min-width:0}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  #scSelect h2{font-size:26px}
+  .box{background:var(--card);border-radius:20px;padding:14px 16px;box-shadow:0 3px 0 var(--line);width:min(100%,420px);
+    display:flex;flex-direction:column;gap:10px;align-items:center}
+  .box h3{font-size:16px}
+  #inp{width:100%;border:2px solid var(--line);border-radius:14px;padding:10px 12px;text-align:center;
+    user-select:text;-webkit-user-select:text;color:var(--ink);background:#fffaf8}
+  #selMsg{min-height:1.6em;color:#c0305c;font-weight:700;font-size:15px}
+
+  /* 型抜き画面 */
+  #scGame{position:absolute;inset:0;display:none;flex-direction:column}
+  #scGame.on{display:flex}
+  #hud{padding:10px 14px 4px;display:flex;flex-direction:column;gap:6px;flex:none}
+  #hud .top{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:900}
+  #hud .big{font-size:22px}
+  #hud .stars{color:#e8a200;letter-spacing:.1em}
+  #hud .time{font-variant-numeric:tabular-nums;min-width:4.2em;text-align:right}
+  .gaugeRow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+  #gauge{flex:1;height:12px;border-radius:99px;background:#f3dfe5;overflow:hidden}
+  #gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb870,#e0305c)}
+  #stageWrap{position:relative;flex:1;min-height:0}
+  #cv{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:none}
+  #toast{position:absolute;left:50%;top:10px;transform:translateX(-50%);max-width:92%;text-align:center;
+    background:rgba(90,58,72,.92);color:#fff;padding:8px 18px;border-radius:999px;font-weight:900;font-size:17px;
+    opacity:0;transition:opacity .2s;pointer-events:none}
+  #toast.on{opacity:1}
+  #toast.bad{background:rgba(200,40,80,.94)}
+  #quit{position:absolute;left:10px;bottom:10px;z-index:2}
+
+  /* 結果 */
+  #scResult h2{font-size:26px}
+  #rank{font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
+  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px}
+  #score{font-size:34px;font-weight:900}
+  .bd{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:16px;text-align:left}
+  .bd b{text-align:right;font-variant-numeric:tabular-nums}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .chip{background:#fff;border-radius:14px;padding:6px 12px;box-shadow:0 3px 0 var(--line);font-size:22px;font-weight:900}
+  .chip small{font-size:13px;margin-left:6px;color:var(--pinkd)}
+  .msg{font-size:16px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <section class="screen" id="scTitle">
+    <h1 id="ttl"></h1>
+    <button class="btn" id="bStart">はじめる</button>
+  </section>
+
+  <section class="screen" id="scSelect">
+    <h2>文字を選ぶ</h2>
+    <div class="box">
+      <h3>ランダム</h3>
+      <div class="row">
+        <button class="btn sm" data-lv="easy">かんたん</button>
+        <button class="btn sm" data-lv="normal">ふつう</button>
+        <button class="btn sm" data-lv="hard">むずかしい</button>
+      </div>
+    </div>
+    <div class="box">
+      <h3>文字を入力（1〜6 文字）</h3>
+      <input id="inp" type="text" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="あ  など">
+      <button class="btn sm" id="bGo">この言葉で挑戦</button>
+    </div>
+    <div id="selMsg" class="msg"></div>
+    <button class="btn sub sm" id="bBackTitle">もどる</button>
+  </section>
+
+  <section id="scGame">
+    <div id="hud">
+      <div class="top">
+        <span class="big nw" id="hCh"></span>
+        <span class="stars nw" id="hStars"></span>
+        <span class="time nw" id="hTime">0.0 秒</span>
+      </div>
+      <div class="gaugeRow"><span class="nw">ヒビ</span><div id="gauge"><i></i></div></div>
+    </div>
+    <div id="stageWrap">
+      <canvas id="cv"></canvas>
+      <div id="toast"></div>
+      <button class="btn sub sm" id="quit">やめる</button>
+    </div>
+  </section>
+
+  <section class="screen" id="scResult">
+    <h2 id="rTitle"></h2>
+    <div id="rank"></div>
+    <div id="score"></div>
+    <div class="bd" id="rBd"></div>
+    <div class="chips" id="rChips"></div>
+    <div class="msg" id="rMsg"></div>
+    <div class="row" id="rBtns"></div>
+  </section>
+</div>
+<script>
+"use strict";

@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>検証 — 文字型抜き</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@800;900&family=Zen+Maru+Gothic:wght@900&display=swap">
+<style>
+  body{font-family:"Yu Gothic UI",system-ui,sans-serif;background:#1c1c1e;color:#eee;padding:24px;line-height:1.7}
+  h1{font-size:18px;margin-bottom:16px}
+  .r{padding:4px 0;border-bottom:1px solid #333}
+  .ok::before{content:"PASS ";color:#6bd07a;font-weight:bold}
+  .ng::before{content:"FAIL ";color:#ff6b6b;font-weight:bold}
+  .info::before{content:"INFO ";color:#7aa7ff;font-weight:bold}
+  .ng{color:#ffb0b0}
+  .why{color:#ff8f8f;padding-left:3em;font-size:13px}
+  #sum{margin-top:18px;font-size:16px;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>文字型抜き — 検証</h1>
+<div id="out"></div>
+<div id="sum"></div>
+<script>
+"use strict";
+
+// ===== 検証 =====
+let pass = 0, fail = 0;
+function T(name, ok, why) {
+  const d = document.createElement('div');
+  d.className = 'r ' + (ok ? 'ok' : 'ng');
+  d.textContent = name + (ok || !why ? '' : '  — ' + why);
+  document.getElementById('out').appendChild(d);
+  ok ? pass++ : fail++;
+}
+function INFO(s) {
+  const d = document.createElement('div');
+  d.className = 'r info'; d.textContent = s;
+  document.getElementById('out').appendChild(d);
+}
+// ===== 設定（数値はここに集約。単位は「砂糖菓子の半径 = 1」）=====
+const CFG = {
+  // --- 文字の形 ---
+  maxChars: 6,                 // 自由入力の最大文字数
+  glyph: {
+    size: 360,                 // 型を作る非表示キャンバスの一辺(px)
+    fontPx: 250,               // 文字の大きさ(px)
+    weight: 900,
+    stroke: 3,                 // 文字をさらに太く丸くする縁取り(px)
+    families: ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"', '"Hiragino Maru Gothic ProN"', '"Yu Gothic UI"', 'sans-serif'],
+    fontTimeoutMs: 2500,
+    minThickness: 0.12,        // 線の太さの平均がこれ未満の記号（♡☆ など細い線）は太くする
+  },
+  shape: {
+    fit: 1.2,                  // 文字の長辺がこの長さになるよう拡縮
+    spacing: 0.010,            // 輪郭を点に分ける間隔
+    minArea: 0.0012,           // これより小さい成分（ノイズ・小さすぎる穴）は捨てる
+    smoothPasses: 2,
+  },
+  // --- 難しさ ---
+  difficulty: {
+    // 点数 = 輪郭の長さ + 0.4*(輪郭の数-1) + 8*狭い部分の割合
+    starAt: [4.5, 7, 10, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5
+    maxScore: 16,              // これを超えると「難しすぎます」
+    maxTight: 0.30,            // 溝がくっつく部分の割合の上限
+    tightDist: 0.07,           // 輪郭どうしがこれより近いと「狭い」
+    tightArc: 0.30,            // 同じ輪郭内ではこれ以上離れた部分だけを比べる
+  },
+  // --- 判定 ---
+  safeHalf: 0.035,             // 溝の中（安全）の半幅
+  edgeHalf: 0.065,             // フチ（ヒビ）の半幅。これを超えると割れる
+  cutR: 0.05,                  // 針が近くを通った点を「切れた」にする距離
+  minSafePx: 6,                // 画面が小さいときも安全の半幅を最低このpxにする
+  stepLen: 0.008,              // 判定の細かい区切り
+  crackRate: 1.5,              // フチを 1.0 の長さ進むとヒビがいくつ増えるか
+  speedLimit: 3.2,             // これ(半径/秒)を超えるとヒビ
+  speedCrack: 0.5,             // 速度超過のヒビの増え方
+  joinFrac: 0.98,              // 輪郭の何割切れたらつながったとみなすか
+  hintFrac: 0.10,              // 切り残しがこの割合以下なら光らせる
+  // --- 針 ---
+  touchOffsetPx: 56,           // スマホで針を指の上にずらす量(px)
+  // --- スコア ---
+  score: {
+    wAccuracy: 400, wCrack: 300, wSpeed: 300,
+    mult: [0.6, 0.7, 0.8, 0.9, 1.0],         // 難しさ★1〜5の倍率
+    rank: { S: 880, A: 750, B: 600 },        // 倍率をかける前の点数で判定
+    targetBase: 5, targetPerLen: 1.2,        // 目安時間(秒) = base + len*perLen
+  },
+  // --- ランダム候補 ---
+  pools: {
+    easy: ['一','二','三','十','口','日','人','大','小','山','川','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
+    normal: ['あ','い','う','え','お','か','き','く','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','空','海','森','犬','雨','星','田','雪','星'],
+    hard: ['魚','龍','鷹','薔','蝶','麒','麟','護','響','鑑','騒','優','驚','藍','蘭','鷲','蠍','贈','難','願','曜','縁','輝','観','麗','露','鯨','器','襲','織'],
+  },
+  bands: { easy: [1, 2], normal: [2, 3], hard: [4, 5] },
+};
+
+// ===== ロジック（DOM に依存しない純関数。verify.html からも呼ぶ）=====
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+// ---------- 入力の検査 ----------
+const EMOJI_RE = /\p{Emoji_Presentation}|\p{Emoji_Modifier}|[\u{1F1E6}-\u{1F1FF}]|‍|️|⃣/u;
+function validateInput(str) {
+  const chars = [];
+  for (const c of Array.from(String(str == null ? '' : str))) {
+    if (/\s/u.test(c) || c === '　' || c === '​' || c === '﻿') continue;   // 空白は無視
+    chars.push(c);
+  }
+  if (!chars.length) return { ok: false, chars, msg: '文字を入力してください' };
+  for (const c of chars) {
+    if (EMOJI_RE.test(c)) return { ok: false, chars, bad: c, msg: 'この文字は型にできません：「' + c + '」' };
+  }
+  if (chars.length > CFG.maxChars) return { ok: false, chars, msg: '文字は' + CFG.maxChars + '文字までです' };
+  return { ok: true, chars };
+}
+
+// ---------- 輪郭の取り出し（マーチングスクエア）----------
+// f: 0..1 の濃さ（W*H）。しきい値 th の等値線を閉じた折れ線の配列として返す（座標は格子の添字）
+function marchLoops(f, W, H, th) {
+  const WH = W * H;
+  const adj = new Map();
+  const link = (a, b) => {
+    let A = adj.get(a); if (!A) adj.set(a, A = []); A.push(b);
+    let B = adj.get(b); if (!B) adj.set(b, B = []); B.push(a);
+  };
+  for (let y = 0; y < H - 1; y++) {
+    for (let x = 0; x < W - 1; x++) {
+      const i = y * W + x;
+      const v0 = f[i], v1 = f[i + 1], v2 = f[i + W + 1], v3 = f[i + W];
+      const c0 = v0 >= th, c1 = v1 >= th, c2 = v2 >= th, c3 = v3 >= th;
+      if (c0 === c1 && c1 === c2 && c2 === c3) continue;
+      const E = [];                      // 上, 右, 下, 左 の順に、交差する辺の id
+      const eids = [i, WH + y * W + x + 1, (y + 1) * W + x, WH + y * W + x];
+      const cr = [c0 !== c1, c1 !== c2, c3 !== c2, c0 !== c3];
+      const cs = [c0, c1, c2, c3];
+      let cnt = 0;
+      for (let k = 0; k < 4; k++) if (cr[k]) { E.push(k); cnt++; }
+      if (cnt === 2) link(eids[E[0]], eids[E[1]]);
+      else if (cnt === 4) {
+        const center = (v0 + v1 + v2 + v3) / 4 >= th;
+        for (let k = 0; k < 4; k++) {
+          // 角 k は 辺(k+3)%4 と 辺 k の間にある
+          if (cs[k] !== center) link(eids[(k + 3) % 4], eids[k]);
+        }
+      }
+    }
+  }
+  const ptOf = id => {
+    if (id < WH) {
+      const y = (id / W) | 0, x = id - y * W;
+      const a = f[y * W + x], b = f[y * W + x + 1];
+      const t = (th - a) / (b - a);
+      return [x + t, y];
+    }
+    id -= WH;
+    const y = (id / W) | 0, x = id - y * W;
+    const a = f[y * W + x], b = f[(y + 1) * W + x];
+    const t = (th - a) / (b - a);
+    return [x, y + t];
+  };
+  const seen = new Set();
+  const loops = [];
+  for (const start of adj.keys()) {
+    if (seen.has(start)) continue;
+    const loop = [];
+    let prev = -1, cur = start;
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      loop.push(ptOf(cur));
+      const nb = adj.get(cur);
+      let nxt = nb[0] !== prev ? nb[0] : nb[1];
+      if (nb.length === 2 && nb[0] === prev && nb[1] === prev) nxt = undefined;
+      prev = cur; cur = nxt;
+    }
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}
+
+function resampleClosed(P, ds) {
+  const n = P.length, cum = [0];
+  for (let i = 0; i < n; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    cum.push(cum[i] + Math.hypot(b[0] - a[0], b[1] - a[1]));
+  }
+  const L = cum[n], m = Math.max(12, Math.round(L / ds)), out = [];
+  let k = 0;
+  for (let s = 0; s < m; s++) {
+    const t = s * L / m;
+    while (k < n - 1 && cum[k + 1] < t) k++;
+    const seg = cum[k + 1] - cum[k], u = seg > 0 ? (t - cum[k]) / seg : 0;
+    const a = P[k], b = P[(k + 1) % n];
+    out.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]);
+  }
+  return out;
+}
+function smoothClosed(P, passes) {
+  let cur = P;
+  for (let p = 0; p < passes; p++) {
+    const n = cur.length, nx = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = cur[(i + n - 1) % n], b = cur[i], c = cur[(i + 1) % n];
+      nx[i] = [(a[0] + 2 * b[0] + c[0]) / 4, (a[1] + 2 * b[1] + c[1]) / 4];
+    }
+    cur = nx;
+  }
+  return cur;
+}
+function polyArea(P) {
+  let s = 0; const n = P.length;
+  for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s += a[0] * b[1] - b[0] * a[1]; }
+  return Math.abs(s) / 2;
+}
+function polyLen(P) {
+  let s = 0; const n = P.length;
+  for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+  return s;
+}
+function pointInPoly(x, y, P) {
+  let inside = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+// 白黒（0..1 の濃さ）の画像から、部品・輪郭を持つ「型」を作る
+// 戻り値: { ok, parts:[{loops:[{pts:Float32Array,n,hole,len,area}]}], loops:[...], length, nParts, nHoles, ... }
+function buildShape(mask, W, H, opt) {
+  const S = Object.assign({}, CFG.shape, opt || {});
+  const f = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    f[i] = (mask[i - W - 1] + mask[i - W] + mask[i - W + 1] + mask[i - 1] + mask[i] + mask[i + 1] + mask[i + W - 1] + mask[i + W] + mask[i + W + 1]) / 9;
+  }
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (mask[y * W + x] >= 0.5) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < x0) return { ok: false, reason: 'empty' };
+  const k = S.fit / Math.max(x1 - x0 + 1, y1 - y0 + 1);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const raw = marchLoops(f, W, H, 0.5);
+  let loops = [];
+  let droppedNoise = 0;
+  for (const r of raw) {
+    let P = r.map(p => [(p[0] - cx) * k, (p[1] - cy) * k]);
+    P = resampleClosed(P, S.spacing);
+    P = smoothClosed(P, S.smoothPasses);
+    const area = polyArea(P);
+    if (area < S.minArea) { droppedNoise++; continue; }
+    loops.push({ P, area, len: polyLen(P) });
+  }
+  loops.sort((a, b) => b.area - a.area);
+  // 入れ子の深さで 外周(偶数) と 穴(奇数) を分ける
+  for (let i = 0; i < loops.length; i++) {
+    const L = loops[i];
+    L.parent = -1; L.depth = 0;
+    for (let j = 0; j < i; j++) {
+      if (pointInPoly(L.P[0][0], L.P[0][1], loops[j].P)) { L.depth++; L.parent = j; }   // 面積の降順なので最後に当たった j が最も内側
+    }
+    L.hole = (L.depth % 2) === 1;
+  }
+  const parts = [], flat = [];
+  const partOf = new Map();
+  for (let i = 0; i < loops.length; i++) {
+    if (loops[i].hole) continue;
+    partOf.set(i, parts.length);
+    parts.push({ loops: [] });
+  }
+  for (let i = 0; i < loops.length; i++) {
+    const L = loops[i];
+    const pi = L.hole ? partOf.get(L.parent) : partOf.get(i);
+    if (pi === undefined) continue;
+    const n = L.P.length, pts = new Float32Array(n * 2);
+    for (let q = 0; q < n; q++) { pts[2 * q] = L.P[q][0]; pts[2 * q + 1] = L.P[q][1]; }
+    const lp = { pts, n, hole: L.hole, len: L.len, area: L.area, part: pi, id: flat.length };
+    parts[pi].loops.push(lp);
+    flat.push(lp);
+  }
+  // 外周を先頭に
+  for (const p of parts) p.loops.sort((a, b) => (a.hole ? 1 : 0) - (b.hole ? 1 : 0));
+  let length = 0, nHoles = 0;
+  for (const l of flat) { length += l.len; if (l.hole) nHoles++; }
+  let ink = 0;
+  for (const p of parts) for (const l of p.loops) ink += l.hole ? -l.area : l.area;
+  const thickness = length > 0 ? 2 * ink / length : 0;     // 線の太さの平均（面積 ≒ 太さ × 中心線の長さ、輪郭長 ≒ 中心線の2倍）
+  const shape = { ok: true, parts, loops: flat, length, thickness, nParts: parts.length, nHoles, nLoops: flat.length, droppedNoise, spacing: S.spacing };
+  rateShape(shape);
+  return shape;
+}
+
+// 難しさ★1〜5 と「難しすぎる」の判定
+function rateShape(shape) {
+  const D = CFG.difficulty;
+  const cell = D.tightDist;
+  const grid = new Map();
+  const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
+  const all = [];
+  for (const l of shape.loops) {
+    for (let i = 0; i < l.n; i++) {
+      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
+      const gx = Math.floor(x / cell), gy = Math.floor(y / cell), kk = key(gx, gy);
+      let a = grid.get(kk); if (!a) grid.set(kk, a = []);
+      const rec = { x, y, l, i };
+      a.push(rec); all.push(rec);
+    }
+  }
+  let tight = 0;
+  const d2 = D.tightDist * D.tightDist;
+  for (const p of all) {
+    const gx = Math.floor(p.x / cell), gy = Math.floor(p.y / cell);
+    let hit = false;
+    for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) {
+      const a = grid.get(key(gx + dx, gy + dy));
+      if (!a) continue;
+      for (const q of a) {
+        const ddx = q.x - p.x, ddy = q.y - p.y;
+        if (ddx * ddx + ddy * ddy >= d2) continue;
+        if (q.l !== p.l) { hit = true; break; }
+        let sep = Math.abs(q.i - p.i); sep = Math.min(sep, p.l.n - sep);
+        if (sep * (p.l.len / p.l.n) > D.tightArc) { hit = true; break; }
+      }
+    }
+    if (hit) tight++;
+  }
+  shape.tight = all.length ? tight / all.length : 0;
+  shape.difficultyScore = shape.length + 0.4 * Math.max(0, shape.nLoops - 1) + 8 * shape.tight;
+  let stars = 5;
+  for (let i = 0; i < D.starAt.length; i++) if (shape.difficultyScore < D.starAt[i]) { stars = i + 1; break; }
+  shape.stars = stars;
+  shape.tooHard = shape.difficultyScore > D.maxScore || shape.tight > D.maxTight;
+  return shape;
+}
+
+// ---------- 判定の数値（画面の大きさで溝の幅を決める）----------
+function judgeParams(R) {
+  const k = Math.max(1, CFG.minSafePx / (CFG.safeHalf * (R || 180)));
+  return {
+    safe: CFG.safeHalf * k, edge: CFG.edgeHalf * k, cutR: CFG.cutR * k,
+    step: CFG.stepLen, crackRate: CFG.crackRate, speedLimit: CFG.speedLimit,
+    speedCrack: CFG.speedCrack, joinFrac: CFG.joinFrac, hintFrac: CFG.hintFrac,
+  };
+}
+
+// ---------- 型抜きの進行（針の判定・切り抜き）----------
+// 使い方: d.down(x,y) → {ok,msg} / d.move(x,y,dt) → イベント配列 / d.up()
+function newDig(shape, P) {
+  P = P || judgeParams(180);
+  const loops = shape.loops;
+  const cell = Math.max(P.edge, P.cutR);
+  const grid = new Map();
+  const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
+  const gx = [], gy = [], gl = [], gi = [];
+  for (const l of loops) {
+    for (let i = 0; i < l.n; i++) {
+      const id = gx.length;
+      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
+      gx.push(x); gy.push(y); gl.push(l.id); gi.push(i);
+      const kk = key(Math.floor(x / cell), Math.floor(y / cell));
+      let a = grid.get(kk); if (!a) grid.set(kk, a = []);
+      a.push(id);
+    }
+  }
+  const cut = loops.map(l => new Uint8Array(l.n));
+  const cutCount = loops.map(() => 0);
+  const joined = loops.map(() => false);
+  const partDone = shape.parts.map(() => false);
+  const d = {
+    shape, P, cut, cutCount, joined, partDone,
+    down: false, started: false, failed: false, failWhy: null, failPos: null, cleared: false,
+    crack: 0, t: 0, accSum: 0, accN: 0, lx: 0, ly: 0, ema: 0, lastMsg: '',
+    distance: 0,
+  };
+  const nearest = (x, y) => {
+    const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
+    let best = -1, bd = Infinity;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const arr = grid.get(key(cxi + a, cyi + b));
+      if (!arr) continue;
+      for (const id of arr) {
+        const dx = gx[id] - x, dy = gy[id] - y, dd = dx * dx + dy * dy;
+        if (dd < bd) { bd = dd; best = id; }
+      }
+    }
+    return { id: best, d: best < 0 ? Infinity : Math.sqrt(bd) };
+  };
+  d.nearest = nearest;
+
+  function cutAround(x, y, loopId, ev) {
+    const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
+    const r2 = P.cutR * P.cutR;
+    let changed = false;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const arr = grid.get(key(cxi + a, cyi + b));
+      if (!arr) continue;
+      for (const id of arr) {
+        if (gl[id] !== loopId) continue;
+        const i = gi[id];
+        if (cut[loopId][i]) continue;
+        const dx = gx[id] - x, dy = gy[id] - y;
+        if (dx * dx + dy * dy <= r2) { cut[loopId][i] = 1; cutCount[loopId]++; changed = true; }
+      }
+    }
+    if (changed && !joined[loopId] && cutCount[loopId] >= Math.ceil(P.joinFrac * loops[loopId].n)) {
+      joined[loopId] = true;
+      const pi = loops[loopId].part;
+      if (!partDone[pi] && shape.parts[pi].loops.every(l => joined[l.id])) {
+        partDone[pi] = true;
+        ev.push({ type: 'part', index: pi });
+        if (partDone.every(Boolean)) { d.cleared = true; d.down = false; ev.push({ type: 'clear' }); }
+      }
+    }
+  }
+  function fail(why, x, y, ev) {
+    d.failed = true; d.failWhy = why; d.failPos = { x, y }; d.down = false;
+    ev.push({ type: 'fail', why });
+  }
+  // 針を刺す（置き直し）。溝の上（フチまで）でだけ受け付ける
+  d.down_ = null;
+  d.press = function (x, y) {
+    if (d.failed || d.cleared) return { ok: false, msg: '' };
+    const n = nearest(x, y);
+    if (n.d > P.edge) { d.lastMsg = 'ここには刺せない'; return { ok: false, msg: 'ここには刺せない' }; }
+    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0;
+    const ev = [];
+    cutAround(x, y, gl[n.id], ev);
+    return { ok: true, msg: '', events: ev };
+  };
+  d.release = function () { d.down = false; };
+  // 針を動かす。前回位置から今回位置までを細かく区切って全部判定する
+  d.move = function (x, y, dt) {
+    const ev = [];
+    if (!d.down || d.failed || d.cleared) return ev;
+    const dx = x - d.lx, dy = y - d.ly, len = Math.hypot(dx, dy);
+    const n = Math.max(1, Math.ceil(len / P.step));
+    const sl = len / n;
+    if (dt > 0 && len > 0) {
+      const sp = len / dt;
+      d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+    }
+    d.distance += len;
+    for (let i = 1; i <= n; i++) {
+      const sx = d.lx + dx * i / n, sy = d.ly + dy * i / n;
+      const r = nearest(sx, sy);
+      if (r.d > P.edge) { fail('out', sx, sy, ev); return ev; }          // 溝の外: その瞬間に割れる
+      if (r.d > P.safe) {                                                 // フチ: ヒビが増える
+        const tt = (r.d - P.safe) / (P.edge - P.safe);
+        d.crack += sl * P.crackRate * (0.35 + 0.65 * tt);
+      }
+      d.accSum += r.d; d.accN++;
+      if (d.crack >= 1) { d.crack = 1; fail('crack', sx, sy, ev); return ev; }
+      cutAround(sx, sy, gl[r.id], ev);
+      if (d.cleared) break;
+    }
+    if (!d.failed && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
+      d.crack += (d.ema / P.speedLimit - 1) * dt * P.speedCrack;
+      if (d.crack >= 1) { d.crack = 1; fail('crack', x, y, ev); return ev; }
+    }
+    d.lx = x; d.ly = y;
+    return ev;
+  };
+  // 切り残しの場所（残りわずかなときだけ）
+  d.hints = function () {
+    let total = 0, rest = 0;
+    for (const l of loops) { total += l.n; if (!joined[l.id]) rest += l.n - cutCount[l.id]; }
+    if (!total || rest === 0 || rest / total > P.hintFrac) return [];
+    const out = [];
+    for (const l of loops) {
+      if (joined[l.id]) continue;
+      for (let i = 0; i < l.n; i += 1) if (!cut[l.id][i]) out.push([l.pts[2 * i], l.pts[2 * i + 1]]);
+    }
+    return out;
+  };
+  d.progress = function () {
+    let total = 0, c = 0;
+    for (const l of loops) { total += l.n; c += cutCount[l.id]; }
+    return total ? c / total : 0;
+  };
+  return d;
+}
+
+// ---------- スコア ----------
+function targetTime(shape) { return CFG.score.targetBase + shape.length * CFG.score.targetPerLen; }
+function scoreDig(dig, shape, P) {
+  P = P || dig.P;
+  const S = CFG.score;
+  const meanD = dig.accN ? dig.accSum / dig.accN : P.edge;
+  const acc = clamp(1 - meanD / P.edge, 0, 1);
+  const crk = clamp(1 - dig.crack, 0, 1);
+  const tg = targetTime(shape);
+  const spd = dig.t <= tg ? 1 : clamp(1 - (dig.t - tg) / (tg * 2), 0, 1);
+  const pa = Math.round(S.wAccuracy * acc), pc = Math.round(S.wCrack * crk), ps = Math.round(S.wSpeed * spd);
+  const base = pa + pc + ps;
+  const mult = S.mult[clamp(shape.stars, 1, 5) - 1];
+  const total = Math.round(base * mult);
+  const rank = base >= S.rank.S ? 'S' : base >= S.rank.A ? 'A' : base >= S.rank.B ? 'B' : 'C';
+  return { acc, crk, spd, pa, pc, ps, base, mult, total, rank, time: dig.t, target: tg, meanD };
+}
+
+// ===== 文字 → 型（キャンバスに描いて読み取る。verify.html でも使う）=====
+const GLYPH = { cache: new Map(), refs: null, canvas: null };
+
+function glyphFont() { return CFG.glyph.weight + ' ' + CFG.glyph.fontPx + 'px ' + CFG.glyph.families.join(','); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Web フォントを待つ（読めなくても先に進む）
+async function loadGlyphFonts(text) {
+  if (!(document.fonts && document.fonts.load)) return;
+  const jobs = ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"'].map(f =>
+    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).catch(() => []), sleep(CFG.glyph.fontTimeoutMs)]));
+  try { await Promise.all(jobs); } catch (e) { /* 端末のフォントで続行 */ }
+}
+
+// 文字を描いて {mask(0..1), ink(画素数), colored(色つき=絵文字)} を返す
+function rasterizeChar(ch, extraStroke) {
+  const N = CFG.glyph.size;
+  let cv = GLYPH.canvas;
+  if (!cv) { cv = GLYPH.canvas = document.createElement('canvas'); cv.width = cv.height = N; }
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#fff'; c.fillRect(0, 0, N, N);
+  c.fillStyle = '#000'; c.strokeStyle = '#000';
+  c.font = glyphFont();
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineJoin = 'round'; const lw = CFG.glyph.stroke + (extraStroke || 0);
+  c.lineWidth = lw;
+  c.fillText(ch, N / 2, N / 2 + CFG.glyph.fontPx * 0.04);
+  if (lw > 0) c.strokeText(ch, N / 2, N / 2 + CFG.glyph.fontPx * 0.04);
+  const im = c.getImageData(0, 0, N, N).data;
+  const mask = new Float32Array(N * N);
+  let ink = 0, colored = 0;
+  for (let i = 0; i < N * N; i++) {
+    const r = im[4 * i], g = im[4 * i + 1], b = im[4 * i + 2];
+    const v = 1 - (r + g + b) / 765;
+    mask[i] = v;
+    if (v > 0.5) ink++;
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 40) colored++;
+  }
+  return { mask, ink, colored: colored > 30, W: N, H: N };
+}
+
+// 文字が「豆腐（フォントに無い）」かどうか: 存在しない文字の描画と同じなら未対応
+function glyphMissing(r) {
+  if (!GLYPH.refs) GLYPH.refs = ['\u{10FFFF}', '￿', '\u{F0001}'].map(rasterizeChar);
+  for (const ref of GLYPH.refs) {
+    if (ref.ink < 50) continue;
+    let diff = 0, uni = 0;
+    for (let i = 0; i < r.mask.length; i++) {
+      const a = r.mask[i] > 0.5, b = ref.mask[i] > 0.5;
+      if (a || b) { uni++; if (a !== b) diff++; }
+    }
+    if (uni > 0 && diff / uni < 0.02) return true;
+  }
+  return false;
+}
+
+// 1 文字 → { ok, shape } か { ok:false, kind:'unsupported'|'toohard', msg }
+function makeShapeSync(ch) {
+  if (GLYPH.cache.has(ch)) return GLYPH.cache.get(ch);
+  let res;
+  const bad = { ok: false, kind: 'unsupported', ch, msg: 'この文字は型にできません：「' + ch + '」' };
+  if (EMOJI_RE.test(ch)) res = bad;
+  else {
+    const r = rasterizeChar(ch);
+    if (r.ink < 80 || r.colored || glyphMissing(r)) res = bad;
+    else {
+      let shape = buildShape(r.mask, r.W, r.H);
+      // 細い線の記号（♡☆ など）は、溝が重ならないよう太らせて作り直す
+      if (shape.ok && shape.thickness < CFG.glyph.minThickness && shape.nLoops <= 4) {
+        for (const extra of [10, 18, 26, 34]) {
+          const r2 = rasterizeChar(ch, extra);
+          const s2 = buildShape(r2.mask, r2.W, r2.H);
+          if (!s2.ok) break;
+          shape = s2;
+          if (s2.thickness >= CFG.glyph.minThickness) break;
+        }
+      }
+      if (!shape.ok || shape.nParts === 0) res = bad;
+      else if (shape.tooHard) res = { ok: false, kind: 'toohard', ch, shape, msg: '難しすぎます：「' + ch + '」' };
+      else res = { ok: true, ch, shape };
+    }
+  }
+  GLYPH.cache.set(ch, res);
+  return res;
+}
+async function makeShape(ch) {
+  if (!GLYPH.cache.has(ch)) await loadGlyphFonts(ch);
+  return makeShapeSync(ch);
+}
+
+// ===== ここから検証本体（ロジックと文字の形生成。DOM の画面には依存しない）=====
+const P180 = judgeParams(180);
+function normalAt(loop, i, cx, cy) {
+  const n = loop.n, a = (i + n - 1) % n, b = (i + 1) % n;
+  let tx = loop.pts[2 * b] - loop.pts[2 * a], ty = loop.pts[2 * b + 1] - loop.pts[2 * a + 1];
+  const l = Math.hypot(tx, ty) || 1; tx /= l; ty /= l;
+  let nx = ty, ny = -tx;
+  const px = loop.pts[2 * i] - cx, py = loop.pts[2 * i + 1] - cy;
+  if (nx * px + ny * py < 0) { nx = -nx; ny = -ny; }       // 外向き
+  return [nx, ny];
+}
+// 輪郭を針でたどる（speed は速度上限に対する割合）
+function traceLoop(dig, loop, speed) {
+  const sp = (speed || 0.5) * dig.P.speedLimit;
+  const step = loop.len / loop.n;
+  const dt = step / sp;
+  const n = loop.n;
+  const at = i => [loop.pts[2 * (i % n)], loop.pts[2 * (i % n) + 1]];
+  const r = dig.press(...at(0));
+  if (!r.ok) return false;
+  for (let i = 1; i <= n + 4 && dig.down; i++) { const p = at(i); dig.move(p[0], p[1], dt); }
+  dig.release();
+  return true;
+}
+function traceAll(dig, shape, speed) {
+  for (const part of shape.parts) for (const l of part.loops) { if (dig.failed || dig.cleared) break; traceLoop(dig, l, speed); }
+}
+const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅）
+  const c = [[0.9, 0.9], [-0.9, 0.9], [0.95, 0], [0, 0.95]];
+  const d0 = newDig(shape, P180);
+  for (const p of c) if (d0.nearest(p[0], p[1]).d > P180.edge * 1.5) return p;
+  return [0.99, 0.0];
+};
+
+(async function () {
+  await loadGlyphFonts('口あ日川いO鬱龘一L');
+  const used = (() => { const c = document.createElement('canvas').getContext('2d'); c.font = glyphFont(); return c.font; })();
+  INFO('描画フォント指定: ' + used + ' / M PLUS Rounded 1c 読込=' + (document.fonts && document.fonts.check('900 20px "M PLUS Rounded 1c"')));
+
+  // --- 形生成 ---
+  const expect = { '口': [1, 1], 'あ': [1, 1], '日': [1, 2], '川': [3, 0], 'い': [2, 0], 'O': [1, 1] };
+  for (const ch of Object.keys(expect)) {
+    const r = makeShapeSync(ch);
+    const s = r.shape;
+    const holesOk = ch === 'あ' ? (s && s.nHoles >= 1 && s.nHoles <= 2) : (s && s.nHoles === expect[ch][1]);   // あ は太い書体だと小さな閉じた隙間が 2 つできる
+    const ok = r.ok && s.nParts === expect[ch][0] && holesOk;
+    T('「' + ch + '」は部品 ' + expect[ch][0] + '・穴 ' + (ch === 'あ' ? '1〜2' : expect[ch][1]), ok,
+      s ? '部品=' + s.nParts + ' 穴=' + s.nHoles + ' 捨てたノイズ=' + s.droppedNoise : r.msg);
+  }
+  // 合成マスク（フォントに依らない）
+  (function () {
+    const W = 120, H = 120, m = new Float32Array(W * H);
+    for (let y = 20; y < 100; y++) for (let x = 20; x < 100; x++) {
+      const cheb = Math.max(Math.abs(x - 60), Math.abs(y - 60));
+      if ((cheb < 40 && cheb >= 22) || cheb < 8) m[y * W + x] = 1;      // 輪 + 穴の中の島
+    }
+    const s = buildShape(m, W, H);
+    T('合成: 「回」形（輪＋中の島）は部品 2・穴 1', s.ok && s.nParts === 2 && s.nHoles === 1, s.ok ? s.nParts + '/' + s.nHoles : s.reason);
+    const s3 = buildShape(new Float32Array(W * H), W, H);
+    T('合成: 空の画像は ok:false', s3.ok === false);
+  })();
+
+  // --- 難しさの目安（情報）---
+  for (const ch of ['一', 'L', '口', 'O', '日', '川', 'い', 'あ', 'ね', '木', '花', '魚', '龍', '麟', '鬱', '龘', '驫', '纛', '響', '護']) {
+    const r = makeShapeSync(ch);
+    const s = r.shape;
+    if (s) INFO('「' + ch + '」★' + s.stars + ' 点=' + s.difficultyScore.toFixed(1) + ' 長さ=' + s.length.toFixed(2) + ' 狭=' + s.tight.toFixed(2) + ' 太さ=' + s.thickness.toFixed(2) + ' 部品=' + s.nParts + ' 穴=' + s.nHoles + (r.ok ? '' : ' → ' + r.kind));
+    else INFO('「' + ch + '」→ ' + r.kind);
+  }
+
+  // --- 針の判定 ---
+  const sq = makeShapeSync('口').shape;
+  (function () {
+    const d = newDig(sq, P180);
+    traceAll(d, sq, 0.5);
+    T('輪郭をたどる針で全部品が外れて成功（口）', d.cleared && !d.failed && d.partDone.every(Boolean), 'cleared=' + d.cleared + ' failed=' + d.failWhy + ' crack=' + d.crack.toFixed(2) + ' progress=' + d.progress().toFixed(3));
+    T('正しくたどればヒビはほぼ 0', d.crack < 0.05, d.crack.toFixed(3));
+    d.t = targetTime(sq) * 0.8;
+    const sc = scoreDig(d, sq);
+    T('スコアは 0〜1000 でランクが付く', sc.total >= 0 && sc.total <= 1000 && 'SABC'.includes(sc.rank), JSON.stringify(sc));
+    INFO('口をていねいに: ' + sc.total + '点 ' + sc.rank + ' ていねい' + sc.pa + ' ヒビ' + sc.pc + ' 速さ' + sc.ps + ' 倍率' + sc.mult + ' 目安' + sc.target.toFixed(1) + 's');
+  })();
+  for (const ch of ['あ', '日', '川', 'い', 'O']) {
+    const s = makeShapeSync(ch).shape;
+    const d = newDig(s, P180);
+    traceAll(d, s, 0.5);
+    T('輪郭をたどる針で成功（' + ch + '）', d.cleared && !d.failed, 'failed=' + d.failWhy + ' crack=' + d.crack.toFixed(2) + ' progress=' + d.progress().toFixed(3) + ' parts=' + d.partDone.join());
+  }
+  (function () {
+    const s = makeShapeSync('い').shape;
+    const d = newDig(s, P180);
+    for (const l of s.parts[0].loops) traceLoop(d, l, 0.5);
+    T('部品は 1 つずつ外れる（い: 1 つ目だけ外れて未クリア）', d.partDone[0] === true && d.partDone[1] === false && !d.cleared);
+  })();
+  (function () {
+    const d = newDig(sq, P180);
+    const l = sq.loops[0];
+    const r = d.press(l.pts[0], l.pts[1]);
+    const off = offPoint(sq);
+    const ev = d.move(off[0], off[1], 0.05);
+    T('溝の外に出た瞬間に割れて失敗', r.ok && d.failed && d.failWhy === 'out' && ev.some(e => e.type === 'fail'), 'failed=' + d.failed + ' why=' + d.failWhy);
+  })();
+  (function () {
+    // フチ（safe〜edge の中間）を進むとヒビが少しずつ増える
+    const d = newDig(sq, P180);
+    const l = sq.loops[0], n = l.n, off = (P180.safe + P180.edge) / 2;
+    const pos = i => { const nm = normalAt(l, i % n, 0, 0); return [l.pts[2 * (i % n)] + nm[0] * off, l.pts[2 * (i % n) + 1] + nm[1] * off]; };
+    d.press(l.pts[0], l.pts[1]);
+    const dt = (l.len / n) / (P180.speedLimit * 0.4);
+    let a = pos(0); d.move(a[0], a[1], dt);
+    for (let i = 1; i <= 12; i++) { a = pos(i); d.move(a[0], a[1], dt); }
+    const c1 = d.crack;
+    T('フチを少し進むとヒビが少し増え、まだ割れない', c1 > 0 && c1 < 0.6 && !d.failed, 'crack=' + c1.toFixed(3) + ' failed=' + d.failed);
+    for (let i = 13; i < 13 + 400 && !d.failed; i++) { a = pos(i); d.move(a[0], a[1], dt); }
+    T('フチを進み続けるとヒビが満タンで割れる', d.failed && d.failWhy === 'crack', 'failed=' + d.failed + ' why=' + d.failWhy + ' crack=' + d.crack.toFixed(2));
+  })();
+  (function () {
+    // 速すぎ
+    const d = newDig(sq, P180);
+    const l = sq.loops[0], n = l.n;
+    d.press(l.pts[0], l.pts[1]);
+    let moved = 0, c10 = null;
+    for (let i = 5; i < n * 3 && !d.failed; i += 5) {
+      d.move(l.pts[2 * (i % n)], l.pts[2 * (i % n) + 1], 0.004); moved++;
+      if (moved === 10) c10 = d.crack;
+    }
+    T('速く動かしすぎるとヒビが入る', c10 > 0, 'crack@10=' + c10);
+    T('速いまま動かし続けると割れる（溝の中でも）', d.failed && d.failWhy === 'crack', 'failed=' + d.failed + ' why=' + d.failWhy);
+    const d2 = newDig(sq, P180);
+    d2.press(l.pts[0], l.pts[1]);
+    for (let i = 1; i <= 30; i++) d2.move(l.pts[2 * i], l.pts[2 * i + 1], (l.len / n) / (P180.speedLimit * 0.5));
+    T('適度な速さならヒビは入らない', d2.crack === 0, 'crack=' + d2.crack);
+  })();
+  (function () {
+    const d = newDig(sq, P180);
+    const off = offPoint(sq);
+    const r = d.press(off[0], off[1]);
+    T('置き直しが溝の外だと刺さらず、割れない', !r.ok && !d.failed && r.msg === 'ここには刺せない' && !d.down, JSON.stringify(r));
+    const l = sq.loops[0];
+    const r2 = d.press(l.pts[0], l.pts[1]);
+    T('置き直しが溝の上なら刺さる', r2.ok && d.down);
+    d.release();
+    d.press(l.pts[40], l.pts[41]);
+    T('針を離して別の溝の上に置き直せる', d.down && !d.failed);
+  })();
+  (function () {
+    // 切り抜き: 98% 未満では外れない
+    const d = newDig(sq, P180);
+    const l = sq.loops[0];
+    d.press(l.pts[0], l.pts[1]);
+    const stop = Math.floor(l.n * 0.9), dt = (l.len / l.n) / (P180.speedLimit * 0.5);
+    for (let i = 1; i <= stop; i++) d.move(l.pts[2 * i], l.pts[2 * i + 1], dt);
+    T('輪郭の 9 割では部品は外れない', !d.partDone[0]);
+    for (const q of sq.loops.slice(1)) traceLoop(d, q, 0.5);
+    T('外周が 9 割・穴が全部のとき、切り残しを光らせる', !d.partDone[0] && d.hints().length > 0, 'hints=' + d.hints().length + ' progress=' + d.progress().toFixed(2));
+  })();
+
+  // --- 入力の制約 ---
+  (function () {
+    const ok = validateInput('あ い　う');
+    T('空白は無視される（全角・半角）', ok.ok && ok.chars.join('') === 'あいう', JSON.stringify(ok));
+    T('空白だけは入力なし', validateInput('  　 ').ok === false);
+    T('絵文字は「この文字は型にできません」', (() => { const r = validateInput('あ😀'); return !r.ok && /型にできません/.test(r.msg); })());
+    T('7 文字は多すぎる、6 文字はよい', validateInput('1234567').ok === false && validateInput('123456').ok === true);
+    T('絵文字は形生成でも未対応', makeShapeSync('🦄').ok === false && makeShapeSync('🦄').kind === 'unsupported');
+    T('フォントに無い文字は未対応（豆腐を型にしない）', makeShapeSync('\u{10FFFD}').ok === false);
+    T('！？♡☆ は使える', ['！', '？', '♡', '☆'].every(c => validateInput(c).ok && makeShapeSync(c).ok), ['！', '？', '♡', '☆'].map(c => c + ':' + makeShapeSync(c).ok).join(' '));
+    T('英数字・かな・漢字は使える', ['A', '7', 'あ', 'ア', '字'].every(c => makeShapeSync(c).ok));
+  })();
+  (function () {
+    const a = makeShapeSync('鬱'), b = makeShapeSync('龘');
+    T('極端に複雑な文字（鬱・龘）は「難しすぎます」で止まらず断る', !a.ok && a.kind === 'toohard' && !b.ok && b.kind === 'toohard' && /難しすぎます/.test(a.msg), '鬱=' + (a.shape ? a.shape.difficultyScore.toFixed(1) : a.kind) + ' 龘=' + (b.shape ? b.shape.difficultyScore.toFixed(1) : b.kind));
+    const easy = ['一', '口', 'L', 'O', 'あ', 'ア', '木', '日'].map(c => makeShapeSync(c));
+    T('ふつうの文字は断られない', easy.every(r => r.ok), easy.map(r => r.ch + ':' + r.ok).join(' '));
+  })();
+
+  document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;
+  document.title = (fail ? 'FAIL ' : 'OK ') + pass + '/' + (pass + fail);
+})();
+</script>
+</body>
+</html>

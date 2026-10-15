@@ -1,0 +1,1070 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>文字型抜き</title>
+<meta name="description" content="砂糖菓子に刻まれた文字を、割らないように針で切り抜くゲーム。">
+<meta name="theme-color" content="#fff4ee">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Ccircle cx=%2732%27 cy=%2732%27 r=%2730%27 fill=%27%23ffc9dc%27/%3E%3Cpath d=%27M20 22h24v20H20z%27 fill=%27none%27 stroke=%27%23a8506f%27 stroke-width=%275%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@800;900&family=Zen+Maru+Gothic:wght@900&display=swap">
+<style>
+  :root{--ink:#5a3a48;--bg:#fff4ee;--pink:#ff8fb1;--pinkd:#e0608a;--card:#ffffff;--line:#f0cdd8;
+    --jp:"M PLUS Rounded 1c","Zen Maru Gothic","Hiragino Maru Gothic ProN","Yu Gothic UI","Meiryo",sans-serif}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--jp);
+    touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+  html,body{height:100vh;height:100dvh}
+  /* 画面の文章は文節の途中で改行しない。短いラベルは折り返さない */
+  body{word-break:auto-phrase;line-break:strict;overflow-wrap:anywhere}
+  h1,h2,p,.msg{text-wrap:balance}
+  .ph{display:inline-block}
+  button,.tag,.chip,.nw{white-space:nowrap}
+  button{font-family:var(--jp);cursor:pointer;touch-action:manipulation;color:var(--ink)}
+  input{font-family:var(--jp);font-size:20px}
+
+  /* 画面 */
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:safe center;
+    gap:14px;padding:20px 16px;overflow:auto;touch-action:pan-y;text-align:center}
+  .screen.on{display:flex}
+  #scTitle h1{font-size:clamp(40px,12vw,76px);letter-spacing:.08em;line-height:1.2}
+  #scTitle p{font-size:15px;opacity:.7}
+  .btn{border:0;border-radius:999px;padding:12px 28px;font-size:20px;font-weight:900;background:var(--pink);color:#fff;
+    box-shadow:0 4px 0 var(--pinkd);min-width:150px}
+  .btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--pinkd)}
+  .btn.sub{background:#fff;color:var(--ink);box-shadow:0 4px 0 var(--line);border:2px solid var(--line)}
+  .btn.sm{font-size:15px;padding:8px 18px;min-width:0}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  #scSelect h2{font-size:26px}
+  .box{background:var(--card);border-radius:20px;padding:14px 16px;box-shadow:0 3px 0 var(--line);width:min(100%,420px);
+    display:flex;flex-direction:column;gap:10px;align-items:center}
+  .box h3{font-size:16px}
+  #inp{width:100%;border:2px solid var(--line);border-radius:14px;padding:10px 12px;text-align:center;
+    user-select:text;-webkit-user-select:text;color:var(--ink);background:#fffaf8}
+  #selMsg{min-height:1.6em;color:#c0305c;font-weight:700;font-size:15px}
+
+  /* 型抜き画面 */
+  #scGame{position:absolute;inset:0;display:none;flex-direction:column}
+  #scGame.on{display:flex}
+  #hud{padding:10px 14px 4px;display:flex;flex-direction:column;gap:6px;flex:none}
+  #hud .top{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:900}
+  #hud .big{font-size:22px}
+  #hud .stars{color:#e8a200;letter-spacing:.1em}
+  #hud .time{font-variant-numeric:tabular-nums;min-width:4.2em;text-align:right}
+  .gaugeRow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+  #gauge{flex:1;height:12px;border-radius:99px;background:#f3dfe5;overflow:hidden}
+  #gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb870,#e0305c)}
+  #stageWrap{position:relative;flex:1;min-height:0}
+  #cv{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:none}
+  #toast{position:absolute;left:50%;top:10px;transform:translateX(-50%);max-width:92%;text-align:center;
+    background:rgba(90,58,72,.92);color:#fff;padding:8px 18px;border-radius:999px;font-weight:900;font-size:17px;
+    opacity:0;transition:opacity .2s;pointer-events:none}
+  #toast.on{opacity:1}
+  #toast.bad{background:rgba(200,40,80,.94)}
+  #quit{position:absolute;left:10px;bottom:10px;z-index:2}
+
+  /* 結果 */
+  #scResult h2{font-size:26px}
+  #rank{font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
+  #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px}
+  #score{font-size:34px;font-weight:900}
+  .bd{display:grid;grid-template-columns:auto auto;gap:4px 18px;font-size:16px;text-align:left}
+  .bd b{text-align:right;font-variant-numeric:tabular-nums}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .chip{background:#fff;border-radius:14px;padding:6px 12px;box-shadow:0 3px 0 var(--line);font-size:22px;font-weight:900}
+  .chip small{font-size:13px;margin-left:6px;color:var(--pinkd)}
+  .msg{font-size:16px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <section class="screen" id="scTitle">
+    <h1 id="ttl"></h1>
+    <button class="btn" id="bStart">はじめる</button>
+  </section>
+
+  <section class="screen" id="scSelect">
+    <h2>文字を選ぶ</h2>
+    <div class="box">
+      <h3>ランダム</h3>
+      <div class="row">
+        <button class="btn sm" data-lv="easy">かんたん</button>
+        <button class="btn sm" data-lv="normal">ふつう</button>
+        <button class="btn sm" data-lv="hard">むずかしい</button>
+      </div>
+    </div>
+    <div class="box">
+      <h3>文字を入力（1〜6 文字）</h3>
+      <input id="inp" type="text" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="あ  など">
+      <button class="btn sm" id="bGo">この言葉で挑戦</button>
+    </div>
+    <div id="selMsg" class="msg"></div>
+    <button class="btn sub sm" id="bBackTitle">もどる</button>
+  </section>
+
+  <section id="scGame">
+    <div id="hud">
+      <div class="top">
+        <span class="big nw" id="hCh"></span>
+        <span class="stars nw" id="hStars"></span>
+        <span class="time nw" id="hTime">0.0 秒</span>
+      </div>
+      <div class="gaugeRow"><span class="nw">ヒビ</span><div id="gauge"><i></i></div></div>
+    </div>
+    <div id="stageWrap">
+      <canvas id="cv"></canvas>
+      <div id="toast"></div>
+      <button class="btn sub sm" id="quit">やめる</button>
+    </div>
+  </section>
+
+  <section class="screen" id="scResult">
+    <h2 id="rTitle"></h2>
+    <div id="rank"></div>
+    <div id="score"></div>
+    <div class="bd" id="rBd"></div>
+    <div class="chips" id="rChips"></div>
+    <div class="msg" id="rMsg"></div>
+    <div class="row" id="rBtns"></div>
+  </section>
+</div>
+<script>
+"use strict";
+// ===== 設定（数値はここに集約。単位は「砂糖菓子の半径 = 1」）=====
+const CFG = {
+  // --- 文字の形 ---
+  maxChars: 6,                 // 自由入力の最大文字数
+  glyph: {
+    size: 360,                 // 型を作る非表示キャンバスの一辺(px)
+    fontPx: 250,               // 文字の大きさ(px)
+    weight: 900,
+    stroke: 3,                 // 文字をさらに太く丸くする縁取り(px)
+    families: ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"', '"Hiragino Maru Gothic ProN"', '"Yu Gothic UI"', 'sans-serif'],
+    fontTimeoutMs: 2500,
+    minThickness: 0.12,        // 線の太さの平均がこれ未満の記号（♡☆ など細い線）は太くする
+  },
+  shape: {
+    fit: 1.2,                  // 文字の長辺がこの長さになるよう拡縮
+    spacing: 0.010,            // 輪郭を点に分ける間隔
+    minArea: 0.0012,           // これより小さい成分（ノイズ・小さすぎる穴）は捨てる
+    smoothPasses: 2,
+  },
+  // --- 難しさ ---
+  difficulty: {
+    // 点数 = 輪郭の長さ + 0.4*(輪郭の数-1) + 8*狭い部分の割合
+    starAt: [4.5, 7, 10, 13.5],  // この値未満で★1,★2,★3,★4。以上は★5
+    maxScore: 16,              // これを超えると「難しすぎます」
+    maxTight: 0.30,            // 溝がくっつく部分の割合の上限
+    tightDist: 0.07,           // 輪郭どうしがこれより近いと「狭い」
+    tightArc: 0.30,            // 同じ輪郭内ではこれ以上離れた部分だけを比べる
+  },
+  // --- 判定 ---
+  safeHalf: 0.035,             // 溝の中（安全）の半幅
+  edgeHalf: 0.065,             // フチ（ヒビ）の半幅。これを超えると割れる
+  cutR: 0.05,                  // 針が近くを通った点を「切れた」にする距離
+  minSafePx: 6,                // 画面が小さいときも安全の半幅を最低このpxにする
+  stepLen: 0.008,              // 判定の細かい区切り
+  crackRate: 1.5,              // フチを 1.0 の長さ進むとヒビがいくつ増えるか
+  speedLimit: 3.2,             // これ(半径/秒)を超えるとヒビ
+  speedCrack: 0.5,             // 速度超過のヒビの増え方
+  joinFrac: 0.98,              // 輪郭の何割切れたらつながったとみなすか
+  hintFrac: 0.10,              // 切り残しがこの割合以下なら光らせる
+  // --- 針 ---
+  touchOffsetPx: 56,           // スマホで針を指の上にずらす量(px)
+  // --- スコア ---
+  score: {
+    wAccuracy: 400, wCrack: 300, wSpeed: 300,
+    mult: [0.6, 0.7, 0.8, 0.9, 1.0],         // 難しさ★1〜5の倍率
+    rank: { S: 880, A: 750, B: 600 },        // 倍率をかける前の点数で判定
+    targetBase: 5, targetPerLen: 1.2,        // 目安時間(秒) = base + len*perLen
+  },
+  // --- ランダム候補 ---
+  pools: {
+    easy: ['一','二','三','十','口','日','人','大','小','山','川','工','土','上','下','L','O','I','T','U','C','H','E','ー','ト','ノ','レ','ニ','コ','ロ','く','し','て','こ'],
+    normal: ['あ','い','う','え','お','か','き','く','け','さ','す','せ','そ','た','ち','つ','と','な','に','ぬ','ね','の','は','ひ','ふ','ほ','ま','み','む','め','も','や','ゆ','よ','ら','り','る','れ','わ','を','ん','ア','カ','キ','サ','ス','ネ','ミ','ヤ','ラ','木','水','火','花','月','空','海','森','犬','雨','星','田','雪','星'],
+    hard: ['魚','龍','鷹','薔','蝶','麒','麟','護','響','鑑','騒','優','驚','藍','蘭','鷲','蠍','贈','難','願','曜','縁','輝','観','麗','露','鯨','器','襲','織'],
+  },
+  bands: { easy: [1, 2], normal: [2, 3], hard: [4, 5] },
+};
+
+// ===== ロジック（DOM に依存しない純関数。verify.html からも呼ぶ）=====
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+// ---------- 入力の検査 ----------
+const EMOJI_RE = /\p{Emoji_Presentation}|\p{Emoji_Modifier}|[\u{1F1E6}-\u{1F1FF}]|‍|️|⃣/u;
+function validateInput(str) {
+  const chars = [];
+  for (const c of Array.from(String(str == null ? '' : str))) {
+    if (/\s/u.test(c) || c === '　' || c === '​' || c === '﻿') continue;   // 空白は無視
+    chars.push(c);
+  }
+  if (!chars.length) return { ok: false, chars, msg: '文字を入力してください' };
+  for (const c of chars) {
+    if (EMOJI_RE.test(c)) return { ok: false, chars, bad: c, msg: 'この文字は型にできません：「' + c + '」' };
+  }
+  if (chars.length > CFG.maxChars) return { ok: false, chars, msg: '文字は' + CFG.maxChars + '文字までです' };
+  return { ok: true, chars };
+}
+
+// ---------- 輪郭の取り出し（マーチングスクエア）----------
+// f: 0..1 の濃さ（W*H）。しきい値 th の等値線を閉じた折れ線の配列として返す（座標は格子の添字）
+function marchLoops(f, W, H, th) {
+  const WH = W * H;
+  const adj = new Map();
+  const link = (a, b) => {
+    let A = adj.get(a); if (!A) adj.set(a, A = []); A.push(b);
+    let B = adj.get(b); if (!B) adj.set(b, B = []); B.push(a);
+  };
+  for (let y = 0; y < H - 1; y++) {
+    for (let x = 0; x < W - 1; x++) {
+      const i = y * W + x;
+      const v0 = f[i], v1 = f[i + 1], v2 = f[i + W + 1], v3 = f[i + W];
+      const c0 = v0 >= th, c1 = v1 >= th, c2 = v2 >= th, c3 = v3 >= th;
+      if (c0 === c1 && c1 === c2 && c2 === c3) continue;
+      const E = [];                      // 上, 右, 下, 左 の順に、交差する辺の id
+      const eids = [i, WH + y * W + x + 1, (y + 1) * W + x, WH + y * W + x];
+      const cr = [c0 !== c1, c1 !== c2, c3 !== c2, c0 !== c3];
+      const cs = [c0, c1, c2, c3];
+      let cnt = 0;
+      for (let k = 0; k < 4; k++) if (cr[k]) { E.push(k); cnt++; }
+      if (cnt === 2) link(eids[E[0]], eids[E[1]]);
+      else if (cnt === 4) {
+        const center = (v0 + v1 + v2 + v3) / 4 >= th;
+        for (let k = 0; k < 4; k++) {
+          // 角 k は 辺(k+3)%4 と 辺 k の間にある
+          if (cs[k] !== center) link(eids[(k + 3) % 4], eids[k]);
+        }
+      }
+    }
+  }
+  const ptOf = id => {
+    if (id < WH) {
+      const y = (id / W) | 0, x = id - y * W;
+      const a = f[y * W + x], b = f[y * W + x + 1];
+      const t = (th - a) / (b - a);
+      return [x + t, y];
+    }
+    id -= WH;
+    const y = (id / W) | 0, x = id - y * W;
+    const a = f[y * W + x], b = f[(y + 1) * W + x];
+    const t = (th - a) / (b - a);
+    return [x, y + t];
+  };
+  const seen = new Set();
+  const loops = [];
+  for (const start of adj.keys()) {
+    if (seen.has(start)) continue;
+    const loop = [];
+    let prev = -1, cur = start;
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      loop.push(ptOf(cur));
+      const nb = adj.get(cur);
+      let nxt = nb[0] !== prev ? nb[0] : nb[1];
+      if (nb.length === 2 && nb[0] === prev && nb[1] === prev) nxt = undefined;
+      prev = cur; cur = nxt;
+    }
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}
+
+function resampleClosed(P, ds) {
+  const n = P.length, cum = [0];
+  for (let i = 0; i < n; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    cum.push(cum[i] + Math.hypot(b[0] - a[0], b[1] - a[1]));
+  }
+  const L = cum[n], m = Math.max(12, Math.round(L / ds)), out = [];
+  let k = 0;
+  for (let s = 0; s < m; s++) {
+    const t = s * L / m;
+    while (k < n - 1 && cum[k + 1] < t) k++;
+    const seg = cum[k + 1] - cum[k], u = seg > 0 ? (t - cum[k]) / seg : 0;
+    const a = P[k], b = P[(k + 1) % n];
+    out.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]);
+  }
+  return out;
+}
+function smoothClosed(P, passes) {
+  let cur = P;
+  for (let p = 0; p < passes; p++) {
+    const n = cur.length, nx = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = cur[(i + n - 1) % n], b = cur[i], c = cur[(i + 1) % n];
+      nx[i] = [(a[0] + 2 * b[0] + c[0]) / 4, (a[1] + 2 * b[1] + c[1]) / 4];
+    }
+    cur = nx;
+  }
+  return cur;
+}
+function polyArea(P) {
+  let s = 0; const n = P.length;
+  for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s += a[0] * b[1] - b[0] * a[1]; }
+  return Math.abs(s) / 2;
+}
+function polyLen(P) {
+  let s = 0; const n = P.length;
+  for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+  return s;
+}
+function pointInPoly(x, y, P) {
+  let inside = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+// 白黒（0..1 の濃さ）の画像から、部品・輪郭を持つ「型」を作る
+// 戻り値: { ok, parts:[{loops:[{pts:Float32Array,n,hole,len,area}]}], loops:[...], length, nParts, nHoles, ... }
+function buildShape(mask, W, H, opt) {
+  const S = Object.assign({}, CFG.shape, opt || {});
+  const f = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    f[i] = (mask[i - W - 1] + mask[i - W] + mask[i - W + 1] + mask[i - 1] + mask[i] + mask[i + 1] + mask[i + W - 1] + mask[i + W] + mask[i + W + 1]) / 9;
+  }
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (mask[y * W + x] >= 0.5) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < x0) return { ok: false, reason: 'empty' };
+  const k = S.fit / Math.max(x1 - x0 + 1, y1 - y0 + 1);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const raw = marchLoops(f, W, H, 0.5);
+  let loops = [];
+  let droppedNoise = 0;
+  for (const r of raw) {
+    let P = r.map(p => [(p[0] - cx) * k, (p[1] - cy) * k]);
+    P = resampleClosed(P, S.spacing);
+    P = smoothClosed(P, S.smoothPasses);
+    const area = polyArea(P);
+    if (area < S.minArea) { droppedNoise++; continue; }
+    loops.push({ P, area, len: polyLen(P) });
+  }
+  loops.sort((a, b) => b.area - a.area);
+  // 入れ子の深さで 外周(偶数) と 穴(奇数) を分ける
+  for (let i = 0; i < loops.length; i++) {
+    const L = loops[i];
+    L.parent = -1; L.depth = 0;
+    for (let j = 0; j < i; j++) {
+      if (pointInPoly(L.P[0][0], L.P[0][1], loops[j].P)) { L.depth++; L.parent = j; }   // 面積の降順なので最後に当たった j が最も内側
+    }
+    L.hole = (L.depth % 2) === 1;
+  }
+  const parts = [], flat = [];
+  const partOf = new Map();
+  for (let i = 0; i < loops.length; i++) {
+    if (loops[i].hole) continue;
+    partOf.set(i, parts.length);
+    parts.push({ loops: [] });
+  }
+  for (let i = 0; i < loops.length; i++) {
+    const L = loops[i];
+    const pi = L.hole ? partOf.get(L.parent) : partOf.get(i);
+    if (pi === undefined) continue;
+    const n = L.P.length, pts = new Float32Array(n * 2);
+    for (let q = 0; q < n; q++) { pts[2 * q] = L.P[q][0]; pts[2 * q + 1] = L.P[q][1]; }
+    const lp = { pts, n, hole: L.hole, len: L.len, area: L.area, part: pi, id: flat.length };
+    parts[pi].loops.push(lp);
+    flat.push(lp);
+  }
+  // 外周を先頭に
+  for (const p of parts) p.loops.sort((a, b) => (a.hole ? 1 : 0) - (b.hole ? 1 : 0));
+  let length = 0, nHoles = 0;
+  for (const l of flat) { length += l.len; if (l.hole) nHoles++; }
+  let ink = 0;
+  for (const p of parts) for (const l of p.loops) ink += l.hole ? -l.area : l.area;
+  const thickness = length > 0 ? 2 * ink / length : 0;     // 線の太さの平均（面積 ≒ 太さ × 中心線の長さ、輪郭長 ≒ 中心線の2倍）
+  const shape = { ok: true, parts, loops: flat, length, thickness, nParts: parts.length, nHoles, nLoops: flat.length, droppedNoise, spacing: S.spacing };
+  rateShape(shape);
+  return shape;
+}
+
+// 難しさ★1〜5 と「難しすぎる」の判定
+function rateShape(shape) {
+  const D = CFG.difficulty;
+  const cell = D.tightDist;
+  const grid = new Map();
+  const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
+  const all = [];
+  for (const l of shape.loops) {
+    for (let i = 0; i < l.n; i++) {
+      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
+      const gx = Math.floor(x / cell), gy = Math.floor(y / cell), kk = key(gx, gy);
+      let a = grid.get(kk); if (!a) grid.set(kk, a = []);
+      const rec = { x, y, l, i };
+      a.push(rec); all.push(rec);
+    }
+  }
+  let tight = 0;
+  const d2 = D.tightDist * D.tightDist;
+  for (const p of all) {
+    const gx = Math.floor(p.x / cell), gy = Math.floor(p.y / cell);
+    let hit = false;
+    for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) {
+      const a = grid.get(key(gx + dx, gy + dy));
+      if (!a) continue;
+      for (const q of a) {
+        const ddx = q.x - p.x, ddy = q.y - p.y;
+        if (ddx * ddx + ddy * ddy >= d2) continue;
+        if (q.l !== p.l) { hit = true; break; }
+        let sep = Math.abs(q.i - p.i); sep = Math.min(sep, p.l.n - sep);
+        if (sep * (p.l.len / p.l.n) > D.tightArc) { hit = true; break; }
+      }
+    }
+    if (hit) tight++;
+  }
+  shape.tight = all.length ? tight / all.length : 0;
+  shape.difficultyScore = shape.length + 0.4 * Math.max(0, shape.nLoops - 1) + 8 * shape.tight;
+  let stars = 5;
+  for (let i = 0; i < D.starAt.length; i++) if (shape.difficultyScore < D.starAt[i]) { stars = i + 1; break; }
+  shape.stars = stars;
+  shape.tooHard = shape.difficultyScore > D.maxScore || shape.tight > D.maxTight;
+  return shape;
+}
+
+// ---------- 判定の数値（画面の大きさで溝の幅を決める）----------
+function judgeParams(R) {
+  const k = Math.max(1, CFG.minSafePx / (CFG.safeHalf * (R || 180)));
+  return {
+    safe: CFG.safeHalf * k, edge: CFG.edgeHalf * k, cutR: CFG.cutR * k,
+    step: CFG.stepLen, crackRate: CFG.crackRate, speedLimit: CFG.speedLimit,
+    speedCrack: CFG.speedCrack, joinFrac: CFG.joinFrac, hintFrac: CFG.hintFrac,
+  };
+}
+
+// ---------- 型抜きの進行（針の判定・切り抜き）----------
+// 使い方: d.down(x,y) → {ok,msg} / d.move(x,y,dt) → イベント配列 / d.up()
+function newDig(shape, P) {
+  P = P || judgeParams(180);
+  const loops = shape.loops;
+  const cell = Math.max(P.edge, P.cutR);
+  const grid = new Map();
+  const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
+  const gx = [], gy = [], gl = [], gi = [];
+  for (const l of loops) {
+    for (let i = 0; i < l.n; i++) {
+      const id = gx.length;
+      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
+      gx.push(x); gy.push(y); gl.push(l.id); gi.push(i);
+      const kk = key(Math.floor(x / cell), Math.floor(y / cell));
+      let a = grid.get(kk); if (!a) grid.set(kk, a = []);
+      a.push(id);
+    }
+  }
+  const cut = loops.map(l => new Uint8Array(l.n));
+  const cutCount = loops.map(() => 0);
+  const joined = loops.map(() => false);
+  const partDone = shape.parts.map(() => false);
+  const d = {
+    shape, P, cut, cutCount, joined, partDone,
+    down: false, started: false, failed: false, failWhy: null, failPos: null, cleared: false,
+    crack: 0, t: 0, accSum: 0, accN: 0, lx: 0, ly: 0, ema: 0, lastMsg: '',
+    distance: 0,
+  };
+  const nearest = (x, y) => {
+    const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
+    let best = -1, bd = Infinity;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const arr = grid.get(key(cxi + a, cyi + b));
+      if (!arr) continue;
+      for (const id of arr) {
+        const dx = gx[id] - x, dy = gy[id] - y, dd = dx * dx + dy * dy;
+        if (dd < bd) { bd = dd; best = id; }
+      }
+    }
+    return { id: best, d: best < 0 ? Infinity : Math.sqrt(bd) };
+  };
+  d.nearest = nearest;
+
+  function cutAround(x, y, loopId, ev) {
+    const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
+    const r2 = P.cutR * P.cutR;
+    let changed = false;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const arr = grid.get(key(cxi + a, cyi + b));
+      if (!arr) continue;
+      for (const id of arr) {
+        if (gl[id] !== loopId) continue;
+        const i = gi[id];
+        if (cut[loopId][i]) continue;
+        const dx = gx[id] - x, dy = gy[id] - y;
+        if (dx * dx + dy * dy <= r2) { cut[loopId][i] = 1; cutCount[loopId]++; changed = true; }
+      }
+    }
+    if (changed && !joined[loopId] && cutCount[loopId] >= Math.ceil(P.joinFrac * loops[loopId].n)) {
+      joined[loopId] = true;
+      const pi = loops[loopId].part;
+      if (!partDone[pi] && shape.parts[pi].loops.every(l => joined[l.id])) {
+        partDone[pi] = true;
+        ev.push({ type: 'part', index: pi });
+        if (partDone.every(Boolean)) { d.cleared = true; d.down = false; ev.push({ type: 'clear' }); }
+      }
+    }
+  }
+  function fail(why, x, y, ev) {
+    d.failed = true; d.failWhy = why; d.failPos = { x, y }; d.down = false;
+    ev.push({ type: 'fail', why });
+  }
+  // 針を刺す（置き直し）。溝の上（フチまで）でだけ受け付ける
+  d.down_ = null;
+  d.press = function (x, y) {
+    if (d.failed || d.cleared) return { ok: false, msg: '' };
+    const n = nearest(x, y);
+    if (n.d > P.edge) { d.lastMsg = 'ここには刺せない'; return { ok: false, msg: 'ここには刺せない' }; }
+    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0;
+    const ev = [];
+    cutAround(x, y, gl[n.id], ev);
+    return { ok: true, msg: '', events: ev };
+  };
+  d.release = function () { d.down = false; };
+  // 針を動かす。前回位置から今回位置までを細かく区切って全部判定する
+  d.move = function (x, y, dt) {
+    const ev = [];
+    if (!d.down || d.failed || d.cleared) return ev;
+    const dx = x - d.lx, dy = y - d.ly, len = Math.hypot(dx, dy);
+    const n = Math.max(1, Math.ceil(len / P.step));
+    const sl = len / n;
+    if (dt > 0 && len > 0) {
+      const sp = len / dt;
+      d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+    }
+    d.distance += len;
+    for (let i = 1; i <= n; i++) {
+      const sx = d.lx + dx * i / n, sy = d.ly + dy * i / n;
+      const r = nearest(sx, sy);
+      if (r.d > P.edge) { fail('out', sx, sy, ev); return ev; }          // 溝の外: その瞬間に割れる
+      if (r.d > P.safe) {                                                 // フチ: ヒビが増える
+        const tt = (r.d - P.safe) / (P.edge - P.safe);
+        d.crack += sl * P.crackRate * (0.35 + 0.65 * tt);
+      }
+      d.accSum += r.d; d.accN++;
+      if (d.crack >= 1) { d.crack = 1; fail('crack', sx, sy, ev); return ev; }
+      cutAround(sx, sy, gl[r.id], ev);
+      if (d.cleared) break;
+    }
+    if (!d.failed && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
+      d.crack += (d.ema / P.speedLimit - 1) * dt * P.speedCrack;
+      if (d.crack >= 1) { d.crack = 1; fail('crack', x, y, ev); return ev; }
+    }
+    d.lx = x; d.ly = y;
+    return ev;
+  };
+  // 切り残しの場所（残りわずかなときだけ）
+  d.hints = function () {
+    let total = 0, rest = 0;
+    for (const l of loops) { total += l.n; if (!joined[l.id]) rest += l.n - cutCount[l.id]; }
+    if (!total || rest === 0 || rest / total > P.hintFrac) return [];
+    const out = [];
+    for (const l of loops) {
+      if (joined[l.id]) continue;
+      for (let i = 0; i < l.n; i += 1) if (!cut[l.id][i]) out.push([l.pts[2 * i], l.pts[2 * i + 1]]);
+    }
+    return out;
+  };
+  d.progress = function () {
+    let total = 0, c = 0;
+    for (const l of loops) { total += l.n; c += cutCount[l.id]; }
+    return total ? c / total : 0;
+  };
+  return d;
+}
+
+// ---------- スコア ----------
+function targetTime(shape) { return CFG.score.targetBase + shape.length * CFG.score.targetPerLen; }
+function scoreDig(dig, shape, P) {
+  P = P || dig.P;
+  const S = CFG.score;
+  const meanD = dig.accN ? dig.accSum / dig.accN : P.edge;
+  const acc = clamp(1 - meanD / P.edge, 0, 1);
+  const crk = clamp(1 - dig.crack, 0, 1);
+  const tg = targetTime(shape);
+  const spd = dig.t <= tg ? 1 : clamp(1 - (dig.t - tg) / (tg * 2), 0, 1);
+  const pa = Math.round(S.wAccuracy * acc), pc = Math.round(S.wCrack * crk), ps = Math.round(S.wSpeed * spd);
+  const base = pa + pc + ps;
+  const mult = S.mult[clamp(shape.stars, 1, 5) - 1];
+  const total = Math.round(base * mult);
+  const rank = base >= S.rank.S ? 'S' : base >= S.rank.A ? 'A' : base >= S.rank.B ? 'B' : 'C';
+  return { acc, crk, spd, pa, pc, ps, base, mult, total, rank, time: dig.t, target: tg, meanD };
+}
+
+// ===== 文字 → 型（キャンバスに描いて読み取る。verify.html でも使う）=====
+const GLYPH = { cache: new Map(), refs: null, canvas: null };
+
+function glyphFont() { return CFG.glyph.weight + ' ' + CFG.glyph.fontPx + 'px ' + CFG.glyph.families.join(','); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Web フォントを待つ（読めなくても先に進む）
+async function loadGlyphFonts(text) {
+  if (!(document.fonts && document.fonts.load)) return;
+  const jobs = ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"'].map(f =>
+    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).catch(() => []), sleep(CFG.glyph.fontTimeoutMs)]));
+  try { await Promise.all(jobs); } catch (e) { /* 端末のフォントで続行 */ }
+}
+
+// 文字を描いて {mask(0..1), ink(画素数), colored(色つき=絵文字)} を返す
+function rasterizeChar(ch, extraStroke) {
+  const N = CFG.glyph.size;
+  let cv = GLYPH.canvas;
+  if (!cv) { cv = GLYPH.canvas = document.createElement('canvas'); cv.width = cv.height = N; }
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#fff'; c.fillRect(0, 0, N, N);
+  c.fillStyle = '#000'; c.strokeStyle = '#000';
+  c.font = glyphFont();
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineJoin = 'round'; const lw = CFG.glyph.stroke + (extraStroke || 0);
+  c.lineWidth = lw;
+  c.fillText(ch, N / 2, N / 2 + CFG.glyph.fontPx * 0.04);
+  if (lw > 0) c.strokeText(ch, N / 2, N / 2 + CFG.glyph.fontPx * 0.04);
+  const im = c.getImageData(0, 0, N, N).data;
+  const mask = new Float32Array(N * N);
+  let ink = 0, colored = 0;
+  for (let i = 0; i < N * N; i++) {
+    const r = im[4 * i], g = im[4 * i + 1], b = im[4 * i + 2];
+    const v = 1 - (r + g + b) / 765;
+    mask[i] = v;
+    if (v > 0.5) ink++;
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 40) colored++;
+  }
+  return { mask, ink, colored: colored > 30, W: N, H: N };
+}
+
+// 文字が「豆腐（フォントに無い）」かどうか: 存在しない文字の描画と同じなら未対応
+function glyphMissing(r) {
+  if (!GLYPH.refs) GLYPH.refs = ['\u{10FFFF}', '￿', '\u{F0001}'].map(rasterizeChar);
+  for (const ref of GLYPH.refs) {
+    if (ref.ink < 50) continue;
+    let diff = 0, uni = 0;
+    for (let i = 0; i < r.mask.length; i++) {
+      const a = r.mask[i] > 0.5, b = ref.mask[i] > 0.5;
+      if (a || b) { uni++; if (a !== b) diff++; }
+    }
+    if (uni > 0 && diff / uni < 0.02) return true;
+  }
+  return false;
+}
+
+// 1 文字 → { ok, shape } か { ok:false, kind:'unsupported'|'toohard', msg }
+function makeShapeSync(ch) {
+  if (GLYPH.cache.has(ch)) return GLYPH.cache.get(ch);
+  let res;
+  const bad = { ok: false, kind: 'unsupported', ch, msg: 'この文字は型にできません：「' + ch + '」' };
+  if (EMOJI_RE.test(ch)) res = bad;
+  else {
+    const r = rasterizeChar(ch);
+    if (r.ink < 80 || r.colored || glyphMissing(r)) res = bad;
+    else {
+      let shape = buildShape(r.mask, r.W, r.H);
+      // 細い線の記号（♡☆ など）は、溝が重ならないよう太らせて作り直す
+      if (shape.ok && shape.thickness < CFG.glyph.minThickness && shape.nLoops <= 4) {
+        for (const extra of [10, 18, 26, 34]) {
+          const r2 = rasterizeChar(ch, extra);
+          const s2 = buildShape(r2.mask, r2.W, r2.H);
+          if (!s2.ok) break;
+          shape = s2;
+          if (s2.thickness >= CFG.glyph.minThickness) break;
+        }
+      }
+      if (!shape.ok || shape.nParts === 0) res = bad;
+      else if (shape.tooHard) res = { ok: false, kind: 'toohard', ch, shape, msg: '難しすぎます：「' + ch + '」' };
+      else res = { ok: true, ch, shape };
+    }
+  }
+  GLYPH.cache.set(ch, res);
+  return res;
+}
+async function makeShape(ch) {
+  if (!GLYPH.cache.has(ch)) await loadGlyphFonts(ch);
+  return makeShapeSync(ch);
+}
+
+// ===== 描画（砂糖菓子・溝・針）=====
+const CANDY = [
+  { fill: '#ffc6da', rim: '#eb97b5', hi: '#ffe9f1', groove: 'rgba(150,60,100,.55)', cutc: '#fffafc' },
+  { fill: '#bfe2ff', rim: '#8cbfe8', hi: '#e6f4ff', groove: 'rgba(50,90,150,.5)', cutc: '#fbfdff' },
+  { fill: '#fff0a6', rim: '#e8cf6a', hi: '#fffadc', groove: 'rgba(150,115,30,.5)', cutc: '#fffef6' },
+];
+const G = {
+  session: null, shape: null, dig: null, P: null, color: CANDY[0], char: '',
+  needle: { x: 0, y: 0, vis: false }, touch: false,
+  over: false, view: { w: 300, h: 300, cx: 150, cy: 150, R: 140, dpr: 1 },
+  failAt: 0, seed: 1, anim: 0,
+};
+
+function loopPath(ctx, l) {
+  const p = l.pts, n = l.n;
+  ctx.moveTo(p[0], p[1]);
+  for (let i = 1; i < n; i++) ctx.lineTo(p[2 * i], p[2 * i + 1]);
+  ctx.closePath();
+}
+function rnd(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+function drawGame(ctx) {
+  const v = G.view;
+  ctx.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+  ctx.clearRect(0, 0, v.w, v.h);
+  if (!G.shape || !G.dig) return;
+  const dig = G.dig, P = G.P, col = G.color, shape = G.shape;
+  ctx.save();
+  ctx.translate(v.cx, v.cy);
+  ctx.scale(v.R, v.R);
+  // 影・板
+  ctx.beginPath(); ctx.arc(0.02, 0.045, 1, 0, 6.2832); ctx.fillStyle = 'rgba(90,40,60,.18)'; ctx.fill();
+  const g = ctx.createRadialGradient(-0.3, -0.35, 0.1, 0, 0, 1.05);
+  g.addColorStop(0, col.hi); g.addColorStop(1, col.fill);
+  ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.2832); ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 0.035; ctx.strokeStyle = col.rim; ctx.stroke();
+  // 溝
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const gw = P.safe * 2;
+  shape.parts.forEach((part, pi) => {
+    if (dig.partDone[pi]) return;
+    ctx.beginPath();
+    for (const l of part.loops) loopPath(ctx, l);
+    ctx.lineWidth = gw; ctx.strokeStyle = col.groove; ctx.stroke();
+    // 切れた溝（明るく）
+    ctx.beginPath();
+    for (const l of part.loops) {
+      const c = dig.cut[l.id], p = l.pts, n = l.n;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        if (c[i] && c[j]) { ctx.moveTo(p[2 * i], p[2 * i + 1]); ctx.lineTo(p[2 * j], p[2 * j + 1]); }
+      }
+    }
+    ctx.lineWidth = gw * 0.78; ctx.strokeStyle = col.cutc; ctx.stroke();
+  });
+  // 外れた部品（浮かせて表示）
+  shape.parts.forEach((part, pi) => {
+    if (!dig.partDone[pi]) return;
+    ctx.save();
+    ctx.translate(-0.015, -0.025);
+    ctx.shadowColor = 'rgba(90,40,60,.45)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4;
+    ctx.beginPath();
+    for (const l of part.loops) loopPath(ctx, l);
+    ctx.fillStyle = col.hi; ctx.fill('evenodd');
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 0.012; ctx.strokeStyle = col.rim; ctx.stroke();
+    ctx.restore();
+  });
+  // 切り残しのヒント
+  const hints = (G.over || dig.failed || dig.cleared) ? [] : dig.hints();
+  if (hints.length) {
+    const a = 0.5 + 0.35 * Math.sin(G.anim * 7);
+    ctx.fillStyle = 'rgba(255,215,0,' + a.toFixed(2) + ')';
+    ctx.beginPath();
+    for (const h of hints) { ctx.moveTo(h[0] + 0.03, h[1]); ctx.arc(h[0], h[1], 0.03, 0, 6.2832); }
+    ctx.fill();
+  }
+  // 割れた表示
+  if (dig.failed && dig.failPos) {
+    const rr = rnd(G.seed), fp = dig.failPos;
+    ctx.strokeStyle = '#4a1d2e'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let k = 0; k < 9; k++) {
+      let x = fp.x, y = fp.y, a = rr() * 6.2832;
+      ctx.lineWidth = 0.014; ctx.beginPath(); ctx.moveTo(x, y);
+      for (let s = 0; s < 7; s++) { a += (rr() - 0.5) * 1.1; x += Math.cos(a) * 0.13; y += Math.sin(a) * 0.13; ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  // 針（px 座標）
+  const nd = G.needle;
+  if (nd.vis && !dig.failed) {
+    const x = v.cx + nd.x * v.R, y = v.cy + nd.y * v.R;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.lineCap = 'round';
+    // 安全な幅の目安（ごく薄く）
+    ctx.beginPath(); ctx.arc(0, 0, P.safe * v.R, 0, 6.2832);
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.shadowColor = 'rgba(0,0,0,.3)'; ctx.shadowBlur = 4; ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;
+    const lg = ctx.createLinearGradient(0, 0, 26, -34);
+    lg.addColorStop(0, '#8b949c'); lg.addColorStop(0.5, '#f4f7fa'); lg.addColorStop(1, '#a5aeb6');
+    ctx.strokeStyle = lg; ctx.lineWidth = 3.2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(24, -32); ctx.stroke();
+    ctx.shadowColor = 'transparent';
+    ctx.beginPath(); ctx.arc(26, -35, 4.2, 0, 6.2832); ctx.fillStyle = dig.down ? '#e0608a' : '#c9d0d6'; ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ===== 画面・操作・進行 =====
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// 文節ごとに inline-block の span で包む（'|' が文節の区切り）。言葉の途中では改行されない
+function wrapPhrases(text) {
+  return String(text).split('|').map(s => '<span class="ph">' + esc(s) + '</span>').join('');
+}
+function setPh(el, text) { el.innerHTML = wrapPhrases(text); }
+
+const SCREENS = ['scTitle', 'scSelect', 'scGame', 'scResult'];
+function show(id) { for (const s of SCREENS) $(s).classList.toggle('on', s === id); G.screen = id; }
+
+let toastTimer = 0;
+function toast(msg, bad, ms) {
+  const t = $('toast');
+  setPh(t, msg);
+  t.classList.toggle('bad', !!bad);
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), ms || 1400);
+}
+
+const LEVEL_NAME = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい' };
+const stars = n => '★'.repeat(n) + '☆'.repeat(5 - n);
+
+// ---------- キャンバスの大きさ ----------
+const cv = $('cv'), cx2d = cv.getContext('2d');
+function layout() {
+  const wrap = $('stageWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const v = G.view;
+  v.w = w; v.h = h; v.cx = w / 2; v.cy = h / 2; v.R = Math.min(w, h) / 2 * 0.95; v.dpr = dpr;
+}
+window.addEventListener('resize', () => { if (G.screen === 'scGame') layout(); });
+
+// ---------- ランダム選び ----------
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+async function pickRandom(level) {
+  const band = CFG.bands[level], pool = shuffle(CFG.pools[level]);
+  let fallback = null;
+  for (let i = 0; i < pool.length && i < 14; i++) {
+    const r = await makeShape(pool[i]);
+    if (!r.ok) continue;
+    if (!fallback) fallback = r;
+    if (r.shape.stars >= band[0] && r.shape.stars <= band[1]) return r;
+  }
+  if (fallback) return fallback;
+  for (const ch of CFG.pools.normal) { const r = await makeShape(ch); if (r.ok) return r; }
+  return null;
+}
+
+// ---------- 進行 ----------
+async function startRandom(level) {
+  $('selMsg').textContent = '文字を選んでいます…';
+  const r = await pickRandom(level);
+  $('selMsg').textContent = '';
+  if (!r) { setPh($('selMsg'), '文字を作れませんでした'); return; }
+  G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
+  beginChar(r);
+}
+async function startWord(str) {
+  const v = validateInput(str);
+  if (!v.ok) { setPh($('selMsg'), v.msg); return false; }
+  $('selMsg').textContent = '型を作っています…';
+  const shapes = [];
+  for (const ch of v.chars) {
+    const r = await makeShape(ch);
+    if (!r.ok) { setPh($('selMsg'), r.msg); return false; }
+    shapes.push(r);
+  }
+  $('selMsg').textContent = '';
+  G.session = { mode: 'word', chars: v.chars, idx: 0, results: [] };
+  beginChar(shapes[0]);
+  return true;
+}
+async function beginChar(res) {
+  const S = G.session;
+  if (!res) res = await makeShape(S.chars[S.idx]);
+  show('scGame');
+  layout();
+  G.shape = res.shape;
+  G.P = judgeParams(G.view.R);
+  G.dig = newDig(G.shape, G.P);
+  G.char = res.ch;
+  G.color = CANDY[Math.floor(Math.random() * CANDY.length)];
+  G.seed = (Math.random() * 1e9) | 0;
+  G.over = false; G.needle.vis = false; G.touch = false;
+  const total = S.chars.length;
+  setPh($('hCh'), (total > 1 ? (S.idx + 1) + '/' + total + '|' : '') + '「' + G.char + '」');
+  $('hStars').textContent = stars(G.shape.stars);
+  $('hTime').textContent = '0.0 秒';
+  $('gauge').firstElementChild.style.width = '0%';
+  toast('輪郭の溝に|針を刺して|なぞろう', false, 2200);
+}
+
+function handleEvents(evs) {
+  if (!evs) return;
+  for (const e of evs) {
+    if (e.type === 'part') toast(G.shape.nParts > 1 ? '部品が外れた！' : '外れた！', false, 900);
+    else if (e.type === 'clear' && !G.over) {
+      G.over = true;
+      toast('抜けた！', false, 900);
+      setTimeout(() => showResult(true), 800);
+    } else if (e.type === 'fail' && !G.over) {
+      G.over = true;
+      toast(e.why === 'out' ? '割れた！|溝の外に出た' : '割れた！|ヒビが満タン', true, 1500);
+      setTimeout(() => showResult(false), 1100);
+    }
+  }
+}
+
+function showResult(ok) {
+  const S = G.session, dig = G.dig;
+  const last = S.idx >= S.chars.length - 1;
+  let sc = null;
+  if (ok) sc = scoreDig(dig, G.shape, G.P);
+  S.results[S.idx] = { ch: G.char, ok, sc, stars: G.shape.stars };
+  show('scResult');
+  $('rChips').innerHTML = '';
+  setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
+  const rk = $('rank');
+  if (ok) {
+    rk.className = sc.rank; rk.textContent = sc.rank;
+    $('score').textContent = sc.total + ' 点';
+    $('rBd').innerHTML =
+      '<span>ていねいさ</span><b>' + sc.pa + ' / ' + CFG.score.wAccuracy + '</b>' +
+      '<span>ヒビの少なさ</span><b>' + sc.pc + ' / ' + CFG.score.wCrack + '</b>' +
+      '<span>速さ（' + sc.time.toFixed(1) + ' 秒）</span><b>' + sc.ps + ' / ' + CFG.score.wSpeed + '</b>' +
+      '<span>難しさ ' + stars(G.shape.stars) + '</span><b>× ' + sc.mult.toFixed(1) + '</b>';
+    $('rMsg').textContent = '';
+  } else {
+    rk.className = 'fail'; rk.textContent = '割れた';
+    $('score').textContent = '0 点';
+    $('rBd').innerHTML = '';
+    setPh($('rMsg'), dig.failWhy === 'out' ? '溝の外に|出てしまいました' : 'ヒビが|入りすぎました');
+  }
+  const b = $('rBtns'); b.innerHTML = '';
+  const add = (label, fn, sub) => { const e = document.createElement('button'); e.className = 'btn' + (sub ? ' sub' : ''); e.textContent = label; e.addEventListener('click', fn); b.appendChild(e); };
+  add('もう一度', () => beginChar({ ok: true, ch: G.char, shape: G.shape }));
+  if (S.mode === 'random') add('次の文字', () => startRandom(S.level), true);
+  else if (!last) add('次の文字', () => { S.idx++; beginChar(); });
+  else add('結果を見る', showSummary);
+  add('文字を選ぶ', toSelect, true);
+}
+
+function showSummary() {
+  const S = G.session;
+  show('scResult');
+  let total = 0, cleared = 0;
+  for (const r of S.results) if (r) { if (r.ok) { total += r.sc.total; cleared++; } }
+  setPh($('rTitle'), '「' + S.chars.join('') + '」の結果');
+  const rk = $('rank'); rk.className = ''; rk.textContent = cleared + ' / ' + S.chars.length;
+  $('score').textContent = '合計 ' + total + ' 点';
+  $('rBd').innerHTML = '';
+  $('rChips').innerHTML = S.chars.map((c, i) => {
+    const r = S.results[i];
+    return '<span class="chip">' + esc(c) + '<small>' + (r && r.ok ? r.sc.rank + ' ' + r.sc.total : '×') + '</small></span>';
+  }).join('');
+  setPh($('rMsg'), cleared === S.chars.length ? '全部抜けた！' : '抜けた文字は|' + cleared + ' 文字');
+  const b = $('rBtns'); b.innerHTML = '';
+  const add = (label, fn, sub) => { const e = document.createElement('button'); e.className = 'btn' + (sub ? ' sub' : ''); e.textContent = label; e.addEventListener('click', fn); b.appendChild(e); };
+  add('はじめから', () => { S.idx = 0; S.results = []; beginChar(); });
+  add('文字を選ぶ', toSelect, true);
+}
+
+function toSelect() { show('scSelect'); $('selMsg').textContent = ''; }
+
+// ---------- 針の操作 ----------
+function setNeedle(e) {
+  const r = cv.getBoundingClientRect();
+  const v = G.view;
+  const off = G.touch ? CFG.touchOffsetPx : 0;
+  const px = e.clientX - r.left, py = e.clientY - r.top - off;
+  G.needle.x = (px - v.cx) / v.R; G.needle.y = (py - v.cy) / v.R; G.needle.vis = true;
+}
+let lastT = 0;
+function act(evs) { handleEvents(evs); updateGauge(); }
+function updateGauge() { if (G.dig) $('gauge').firstElementChild.style.width = Math.round(G.dig.crack * 100) + '%'; }
+
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (_) { }
+  G.touch = e.pointerType !== 'mouse';
+  setNeedle(e);
+  if (!G.dig || G.over) return;
+  const r = G.dig.press(G.needle.x, G.needle.y);
+  lastT = e.timeStamp;
+  if (!r.ok) toast('ここには刺せない', true, 900);
+  else act(r.events);
+});
+cv.addEventListener('pointermove', e => {
+  e.preventDefault();
+  const list = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
+  for (const ev of list) {
+    setNeedle(ev);
+    if (G.dig && G.dig.down && !G.over) {
+      const dt = clamp((ev.timeStamp - lastT) / 1000, 1 / 240, 0.1);
+      lastT = ev.timeStamp;
+      act(G.dig.move(G.needle.x, G.needle.y, dt));
+    }
+  }
+});
+const lift = e => { if (G.dig) G.dig.release(); if (G.touch) G.needle.vis = false; };
+cv.addEventListener('pointerup', lift);
+cv.addEventListener('pointercancel', lift);
+cv.addEventListener('pointerleave', e => { if (!G.touch && !(G.dig && G.dig.down)) G.needle.vis = false; });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('gesturestart', e => e.preventDefault());
+
+// ---------- ボタン ----------
+$('bStart').addEventListener('click', toSelect);
+$('bBackTitle').addEventListener('click', () => show('scTitle'));
+document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
+$('bGo').addEventListener('click', () => startWord($('inp').value));
+$('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
+$('quit').addEventListener('click', toSelect);
+
+// ---------- 描画ループ ----------
+let prevT = 0;
+function frame(t) {
+  const dt = Math.min(0.1, (t - prevT) / 1000 || 0); prevT = t;
+  G.anim = t / 1000;
+  if (G.screen === 'scGame' && G.dig) {
+    if (G.dig.started && !G.over) {
+      G.dig.t += dt;
+      $('hTime').textContent = G.dig.t.toFixed(1) + ' 秒';
+    }
+    drawGame(cx2d);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ===== 起動・テスト用フック =====
+setPh($('ttl'), '文字型抜き');
+show('scTitle');
+requestAnimationFrame(frame);
+loadGlyphFonts('あアA').catch(() => { });
+
+// 検証・ブラウザ確認用。針を座標列で動かして判定する、全部切る、など
+window.__DEBUG = {
+  G, CFG,
+  get shape() { return G.shape; },
+  get dig() { return G.dig; },
+  get screen() { return G.screen; },
+  contour() { return G.shape.loops.map(l => ({ hole: l.hole, part: l.part, pts: Array.from(l.pts) })); },
+  state() {
+    const d = G.dig;
+    return d ? { failed: d.failed, why: d.failWhy, cleared: d.cleared, crack: d.crack, down: d.down, progress: d.progress(), partDone: d.partDone.slice(), t: d.t, over: G.over, screen: G.screen } : { screen: G.screen };
+  },
+  press(x, y) { const r = G.dig.press(x, y); G.needle.x = x; G.needle.y = y; G.needle.vis = true; if (r.ok) act(r.events); return r; },
+  move(x, y, dt) { G.needle.x = x; G.needle.y = y; const ev = G.dig.move(x, y, dt || 0.016); act(ev); return ev; },
+  release() { G.dig.release(); },
+  // 輪郭を順にたどる（speed は速度上限に対する割合）
+  trace(speed) {
+    const d = G.dig, sp = (speed || 0.5) * d.P.speedLimit;
+    for (const part of G.shape.parts) for (const l of part.loops) {
+      if (G.over) return this.state();
+      const dt = (l.len / l.n) / sp;
+      const at = i => [l.pts[2 * (i % l.n)], l.pts[2 * (i % l.n) + 1]];
+      this.press(...at(0));
+      for (let i = 1; i <= l.n + 4 && d.down; i++) { const p = at(i); this.move(p[0], p[1], dt); }
+      d.release();
+      d.t += l.len / sp;
+    }
+    return this.state();
+  },
+  cutAll() { return this.trace(0.5); },
+  startWord, startRandom, beginChar, showResult,
+  shapeOf: ch => makeShapeSync(ch),
+};
+</script>
+</body>
+</html>
