@@ -19,6 +19,9 @@ function show(id) {
 G.store = getStorage();
 G.rec = loadRecord(G.store);
 G.howSeen = loadHowtoSeen(G.store);
+G.hints = loadHintsSeen(G.store);
+G.lastLevel = loadLastLevel(G.store);
+G.hc = 0;
 G.attempt = 0;
 
 // ---------- タイトルの飾り（砂糖菓子の質感を流用。軽く）----------
@@ -110,19 +113,26 @@ async function startRandom(level) {
   $('selMsg').textContent = '文字を選んでいます…';
   const r = await pickRandom(level);
   $('selMsg').textContent = '';
-  if (!r) { setPh($('selMsg'), '文字を作れませんでした'); return; }
+  if (!r) { show('scSelect'); setPh($('selMsg'), '文字を作れませんでした'); return; }
+  G.lastLevel = level; saveLastLevel(G.store, level);
   G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
   launch(r);
 }
-// 最初の型抜きの前に、あそびかたを 1 回だけ自動で出す
-function launch(r) {
-  if (G.howSeen) { beginChar(r); return; }
-  showHow(() => beginChar(r));
+// 「あそぶ」: 文字選択を挟まず、すぐ 1 枚目を始める
+async function quickStart() {
+  const plan = startPlan(G.rec, G.howSeen, G.lastLevel);
+  if (plan.first) {
+    const r = await makeShape(plan.ch);
+    if (r.ok) {
+      G.session = { mode: 'random', level: plan.level, chars: [r.ch], idx: 0, results: [], first: r };
+      launch(r);
+      return;
+    }
+  }
+  startRandom(plan.level);
 }
-let howNext = null;
-function showHow(next) {
-  howNext = next || null;
-  $('bHowGo').textContent = howNext ? 'はじめる' : 'もどる';
+function launch(r) { beginChar(r); }
+function showHow() {
   show('scHow');
   $('scHow').scrollTop = 0;
   if (!G.howSeen) { G.howSeen = true; saveHowtoSeen(G.store); }
@@ -165,7 +175,39 @@ async function beginChar(res) {
   $('hStars').textContent = stars(G.shape.stars);
   $('hTime').textContent = '0.0 秒';
   $('gauge').firstElementChild.style.width = '0%';
-  toast('輪郭の溝に|針を刺して|なぞろう', false, 2200);
+  G.hc = 0;
+  hideHint();
+  updateGoal();
+  if (!giveHint('pre')) toast('輪郭の溝に|針を刺して|なぞろう', false, 2200);
+}
+
+// ---------- 目標表示・一言ヒント ----------
+function updateGoal() {
+  const d = G.dig; if (!d) return;
+  const total = d.partDone.length, left = d.partDone.filter(x => !x).length;
+  $('hLeft').textContent = 'のこり ' + left + '/' + total;
+}
+let hintTimer = 0;
+function hideHint() { G.hintKind = null; clearTimeout(hintTimer); $('hint').classList.remove('on'); }
+function giveHint(kind) {
+  const r = takeHint(G.hints, kind);
+  if (!r) return false;
+  G.hints = r.seen; saveHintsSeen(G.store, G.hints);
+  setPh($('hint'), r.text);
+  $('hint').classList.add('on');
+  G.hintKind = kind;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(hideHint, kind === 'pre' ? 15000 : 2800);
+  return true;
+}
+function checkHints() {
+  const d = G.dig;
+  if (!d || G.over || d.failed || d.cleared) return;
+  const grew = d.crack > G.hc + 1e-6; G.hc = d.crack;
+  const H = G.hints;
+  if (!H.fast && grew && d.ema > d.P.speedLimit) giveHint('fast');
+  else if (!H.edge && d.down && d.nearest(G.needle.x, G.needle.y).d > d.P.safe) giveHint('edge');
+  else if (!H.near && d.started && d.hints().length) giveHint('near');
 }
 
 function handleEvents(evs) {
@@ -174,6 +216,7 @@ function handleEvents(evs) {
     if (e.type === 'part') {
       toast(G.shape.nParts > 1 ? '部品が外れた！' : '外れた！', false, 900);
       G.fx.partT[e.index] = G.anim;
+      updateGoal();
       const src = [];
       for (const l of G.shape.parts[e.index].loops) for (let i = 0; i < l.n; i += 2) src.push([l.pts[2 * i], l.pts[2 * i + 1]]);
       const n = reducedMotion() ? FX.powderReduced : FX.powder;
@@ -222,6 +265,8 @@ function showResult(ok) {
   setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
   const rk = $('rank');
   rk.className = ''; rk.textContent = '';
+  $('rNext').textContent = ''; $('rWins').textContent = '';
+  hideHint();
   void rk.offsetWidth;                       // アニメーションをやり直す
   if (ok) {
     rk.className = sc.rank + ' pop'; rk.textContent = sc.rank;
@@ -234,6 +279,9 @@ function showResult(ok) {
       '<span>速さ（' + sc.time.toFixed(1) + ' 秒）</span><b>' + sc.ps + ' / ' + CFG.score.wSpeed + '</b>' +
       '<span>難しさ ' + stars(G.shape.stars) + '</span><b>× ' + sc.mult.toFixed(1) + '</b>';
     $('rMsg').textContent = '';
+    const gp = nextRankGap(sc.base, sc.mult);
+    setPh($('rNext'), gp ? '次のランク ' + gp.next + ' まで|あと ' + gp.gap + ' 点' : 'いちばん上の|ランク S！');
+    setPh($('rWins'), 'これまでの成功：|ぜんぶで ' + totalClears(G.rec) + ' 回|（この文字 ' + rr.entry.clears + ' 回）');
   } else {
     rk.className = 'fail pop'; rk.textContent = '割れた';
     $('score').textContent = '0 点';
@@ -268,6 +316,7 @@ function showSummary() {
   for (const r of S.results) if (r) { if (r.ok) { total += r.sc.total; cleared++; } }
   setPh($('rTitle'), '「' + S.chars.join('') + '」の結果');
   $('rBest').textContent = '';
+  $('rNext').textContent = ''; $('rWins').textContent = '';
   const rk = $('rank'); rk.className = ''; rk.textContent = cleared + ' / ' + S.chars.length;
   $('score').textContent = '合計 ' + total + ' 点';
   $('rBd').innerHTML = '';
@@ -317,6 +366,7 @@ let lastT = 0;
 function act(evs) {
   handleEvents(evs);
   updateGauge();
+  checkHints();
   const d = G.dig;
   if (d && G.fx && !d.failed && !d.cleared) {
     if (crackUpdate(G.fx.cracks, G.needle.x, G.needle.y, d.crack) > 0) SFX.crack();
@@ -333,7 +383,7 @@ cv.addEventListener('pointerdown', e => {
   const r = G.dig.press(G.needle.x, G.needle.y);
   lastT = e.timeStamp;
   if (!r.ok) toast('ここには刺せない', true, 900);
-  else { SFX.scrapeStart(); SFX.scrapeSet(0, false); act(r.events); }
+  else { if (G.hintKind === 'pre') hideHint(); SFX.scrapeStart(); SFX.scrapeSet(0, false); act(r.events); }
 });
 cv.addEventListener('pointermove', e => {
   e.preventDefault();
@@ -358,12 +408,10 @@ cv.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
 
 // ---------- ボタン ----------
-$('bStart').addEventListener('click', toSelect);
-$('bHow').addEventListener('click', () => showHow(null));
-$('bHowGo').addEventListener('click', () => {
-  const f = howNext; howNext = null;
-  if (f) f(); else show('scTitle');
-});
+$('bStart').addEventListener('click', quickStart);
+$('bPick').addEventListener('click', toSelect);
+$('bHow').addEventListener('click', showHow);
+$('bHowGo').addEventListener('click', () => show('scTitle'));
 $('bRec').addEventListener('click', showRecords);
 $('bRecBack').addEventListener('click', toSelect);
 $('bRecReset').addEventListener('click', () => { setPh($('recAsk'), 'きろくを|ぜんぶ消しますか？'); $('recConf').hidden = false; });
@@ -373,7 +421,7 @@ $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-function leaveGame() { G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
+function leaveGame() { hideHint(); G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
 // 型抜き中は、誤タップで失わないよう確認する（割れた・抜けたあとは確認なし）
 $('quit').addEventListener('click', () => { if (G.over || !G.dig || G.dig.failed || G.dig.cleared) leaveGame(); else $('quitBox').classList.add('ask'); });
 $('quitYes').addEventListener('click', leaveGame);

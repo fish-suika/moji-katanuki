@@ -56,6 +56,8 @@
   #hud .stars{color:#e8a200;letter-spacing:.1em}
   #hud .time{font-variant-numeric:tabular-nums;min-width:4.2em;text-align:right}
   .gaugeRow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+  .goal{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px;font-weight:900}
+  .goal #hLeft{font-variant-numeric:tabular-nums;color:var(--pinkd)}
   #gauge{flex:1;height:12px;border-radius:99px;background:#f3dfe5;overflow:hidden}
   #gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb870,#e0305c)}
   #stageWrap{position:relative;flex:1;min-height:0}
@@ -64,10 +66,15 @@
     background:rgba(90,58,72,.92);color:#fff;padding:8px 18px;border-radius:999px;font-weight:900;font-size:17px;
     opacity:0;transition:opacity .2s;pointer-events:none}
   #toast.on{opacity:1}
+  #hint{position:absolute;left:50%;top:56px;transform:translateX(-50%);z-index:4;max-width:88%;text-align:center;
+    background:rgba(255,255,255,.96);color:var(--ink);border:2px solid var(--line);padding:6px 14px;border-radius:18px;
+    font-weight:900;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none}
+  #hint.on{opacity:1}
   #toast.bad{background:rgba(200,40,80,.94)}
 
   /* 結果 */
   #scResult h2{font-size:26px}
+  #scResult>*{flex:none}
   #rank{position:relative;display:inline-block;min-height:96px;font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
   #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px;min-height:48px}
   #rank.S{color:#ff5c93;text-shadow:0 0 16px rgba(255,205,80,.95),0 3px 0 #fff}
@@ -101,7 +108,9 @@
   .chip small{font-size:13px;margin-left:6px;color:var(--pinkd)}
   .msg{font-size:16px;font-weight:700}
   #rBest{min-height:0;font-weight:900;font-size:18px;color:#d4366b}
-  #rBest:empty{display:none}
+  #rBest:empty,#rNext:empty,#rWins:empty{display:none}
+  #rNext{font-weight:900;color:var(--pinkd)}
+  #rWins{font-size:14px;opacity:.8}
   #rBest.new{animation:bestPop .6s cubic-bezier(.2,.9,.3,1) both}
   @keyframes bestPop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.15);opacity:1}100%{transform:scale(1)}}
   @media (prefers-reduced-motion:reduce){#rBest.new{animation:none}}
@@ -157,6 +166,7 @@
     <p class="lead" id="ttlLead"></p>
     <div class="stack">
       <button class="btn" id="bStart">あそぶ</button>
+      <button class="btn sub" id="bPick">もじをえらぶ</button>
       <button class="btn sub" id="bHow">あそびかた</button>
     </div>
   </section>
@@ -213,12 +223,14 @@
         <span class="stars nw" id="hStars"></span>
         <span class="time nw" id="hTime">0.0 秒</span>
       </div>
+      <div class="goal"><span class="nw">ぜんぶ ぬきとろう</span><span class="nw" id="hLeft"></span></div>
       <div class="gaugeRow"><span class="nw">ヒビ</span><div id="gauge"><i></i></div></div>
     </div>
     <div id="stageWrap">
       <canvas id="cv"></canvas>
       <div id="vig"></div>
       <div id="toast"></div>
+      <div id="hint" aria-live="polite"></div>
       <div id="quitBox">
         <button class="btn sub sm" id="quit">やめる</button>
         <span id="quitAsk"><span class="nw">やめますか？</span><button class="btn sm" id="quitYes">やめる</button><button class="btn sub sm" id="quitNo">つづける</button></span>
@@ -233,6 +245,8 @@
     <div class="bd" id="rBd"></div>
     <div class="chips" id="rChips"></div>
     <div class="msg" id="rBest"></div>
+    <div class="msg" id="rNext"></div>
+    <div class="msg" id="rWins"></div>
     <div class="msg" id="rMsg"></div>
     <div class="row" id="rBtns"></div>
   </section>
@@ -1450,6 +1464,51 @@ function clearRecord(st) {
 function loadHowtoSeen(st) { try { return !!st && st.getItem(HOWTO_KEY) === '1'; } catch (_) { return false; } }
 function saveHowtoSeen(st) { try { if (!st) return false; st.setItem(HOWTO_KEY, '1'); return true; } catch (_) { return false; } }
 
+// ===== すぐ始める・一言ヒント・次のランクまでの点数（純ロジック）=====
+const LEVEL_KEY = 'mojiKatanuki.level';
+const HINT_KEY = 'mojiKatanuki.hints';
+const FIRST_CHAR = '口';
+const LEVELS = ['easy', 'normal', 'hard'];
+const HINT_TEXT = {
+  pre: 'みぞの上に|針を置こう',
+  edge: 'ふちは|ヒビが入るよ。|ゆっくり',
+  fast: 'はやすぎ！|ゆっくり|丁寧に',
+  near: 'もう少し！|光っている|ところ',
+};
+function loadLastLevel(st) { try { const v = st && st.getItem(LEVEL_KEY); return LEVELS.indexOf(v) >= 0 ? v : null; } catch (_) { return null; } }
+function saveLastLevel(st, lv) { try { if (!st || LEVELS.indexOf(lv) < 0) return false; st.setItem(LEVEL_KEY, lv); return true; } catch (_) { return false; } }
+// 「あそぶ」を押したときの最初の 1 枚。初回（あそびかた未読・記録なし）は「口」(かんたん)、2 回目以降は直近の段階（未選択はふつう）でランダム
+function startPlan(rec, howSeen, lastLevel) {
+  const played = !!(rec && rec.total > 0);
+  if (!howSeen && !played) return { first: true, ch: FIRST_CHAR, level: 'easy' };
+  return { first: false, ch: null, level: LEVELS.indexOf(lastLevel) >= 0 ? lastLevel : 'normal' };
+}
+function loadHintsSeen(st) {
+  const s = { pre: false, edge: false, fast: false, near: false };
+  try { const o = st ? JSON.parse(st.getItem(HINT_KEY)) : null; if (o && typeof o === 'object') for (const k of Object.keys(s)) s[k] = o[k] === true; } catch (_) { }
+  return s;
+}
+function saveHintsSeen(st, seen) { try { if (!st) return false; st.setItem(HINT_KEY, JSON.stringify(seen)); return true; } catch (_) { return false; } }
+// まだ出していないヒントなら {text, seen(出したことにした新しい既読)}、出し済みなら null
+function takeHint(seen, kind) {
+  if (!HINT_TEXT[kind] || (seen && seen[kind])) return null;
+  const n = Object.assign({ pre: false, edge: false, fast: false, near: false }, seen);
+  n[kind] = true;
+  return { text: HINT_TEXT[kind], seen: n };
+}
+// 次のランクまでの点数（表示する合計点の単位）。最上位 S は null
+function nextRankGap(base, mult) {
+  const R = CFG.score.rank;
+  if (base >= R.S) return null;
+  const next = base >= R.A ? 'S' : base >= R.B ? 'A' : 'B';
+  return { next, gap: Math.max(1, Math.ceil((R[next] - base) * mult)) };
+}
+function totalClears(rec) {
+  const r = sanitizeRecord(rec); let n = 0;
+  for (const k of Object.keys(r.chars)) n += r.chars[k].clears;
+  return n;
+}
+
 // ===== 画面・操作・進行 =====
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1470,6 +1529,9 @@ function show(id) {
 G.store = getStorage();
 G.rec = loadRecord(G.store);
 G.howSeen = loadHowtoSeen(G.store);
+G.hints = loadHintsSeen(G.store);
+G.lastLevel = loadLastLevel(G.store);
+G.hc = 0;
 G.attempt = 0;
 
 // ---------- タイトルの飾り（砂糖菓子の質感を流用。軽く）----------
@@ -1561,19 +1623,26 @@ async function startRandom(level) {
   $('selMsg').textContent = '文字を選んでいます…';
   const r = await pickRandom(level);
   $('selMsg').textContent = '';
-  if (!r) { setPh($('selMsg'), '文字を作れませんでした'); return; }
+  if (!r) { show('scSelect'); setPh($('selMsg'), '文字を作れませんでした'); return; }
+  G.lastLevel = level; saveLastLevel(G.store, level);
   G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
   launch(r);
 }
-// 最初の型抜きの前に、あそびかたを 1 回だけ自動で出す
-function launch(r) {
-  if (G.howSeen) { beginChar(r); return; }
-  showHow(() => beginChar(r));
+// 「あそぶ」: 文字選択を挟まず、すぐ 1 枚目を始める
+async function quickStart() {
+  const plan = startPlan(G.rec, G.howSeen, G.lastLevel);
+  if (plan.first) {
+    const r = await makeShape(plan.ch);
+    if (r.ok) {
+      G.session = { mode: 'random', level: plan.level, chars: [r.ch], idx: 0, results: [], first: r };
+      launch(r);
+      return;
+    }
+  }
+  startRandom(plan.level);
 }
-let howNext = null;
-function showHow(next) {
-  howNext = next || null;
-  $('bHowGo').textContent = howNext ? 'はじめる' : 'もどる';
+function launch(r) { beginChar(r); }
+function showHow() {
   show('scHow');
   $('scHow').scrollTop = 0;
   if (!G.howSeen) { G.howSeen = true; saveHowtoSeen(G.store); }
@@ -1616,7 +1685,39 @@ async function beginChar(res) {
   $('hStars').textContent = stars(G.shape.stars);
   $('hTime').textContent = '0.0 秒';
   $('gauge').firstElementChild.style.width = '0%';
-  toast('輪郭の溝に|針を刺して|なぞろう', false, 2200);
+  G.hc = 0;
+  hideHint();
+  updateGoal();
+  if (!giveHint('pre')) toast('輪郭の溝に|針を刺して|なぞろう', false, 2200);
+}
+
+// ---------- 目標表示・一言ヒント ----------
+function updateGoal() {
+  const d = G.dig; if (!d) return;
+  const total = d.partDone.length, left = d.partDone.filter(x => !x).length;
+  $('hLeft').textContent = 'のこり ' + left + '/' + total;
+}
+let hintTimer = 0;
+function hideHint() { G.hintKind = null; clearTimeout(hintTimer); $('hint').classList.remove('on'); }
+function giveHint(kind) {
+  const r = takeHint(G.hints, kind);
+  if (!r) return false;
+  G.hints = r.seen; saveHintsSeen(G.store, G.hints);
+  setPh($('hint'), r.text);
+  $('hint').classList.add('on');
+  G.hintKind = kind;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(hideHint, kind === 'pre' ? 15000 : 2800);
+  return true;
+}
+function checkHints() {
+  const d = G.dig;
+  if (!d || G.over || d.failed || d.cleared) return;
+  const grew = d.crack > G.hc + 1e-6; G.hc = d.crack;
+  const H = G.hints;
+  if (!H.fast && grew && d.ema > d.P.speedLimit) giveHint('fast');
+  else if (!H.edge && d.down && d.nearest(G.needle.x, G.needle.y).d > d.P.safe) giveHint('edge');
+  else if (!H.near && d.started && d.hints().length) giveHint('near');
 }
 
 function handleEvents(evs) {
@@ -1625,6 +1726,7 @@ function handleEvents(evs) {
     if (e.type === 'part') {
       toast(G.shape.nParts > 1 ? '部品が外れた！' : '外れた！', false, 900);
       G.fx.partT[e.index] = G.anim;
+      updateGoal();
       const src = [];
       for (const l of G.shape.parts[e.index].loops) for (let i = 0; i < l.n; i += 2) src.push([l.pts[2 * i], l.pts[2 * i + 1]]);
       const n = reducedMotion() ? FX.powderReduced : FX.powder;
@@ -1673,6 +1775,8 @@ function showResult(ok) {
   setPh($('rTitle'), '「' + G.char + '」を' + (ok ? '抜いた！' : '抜けなかった'));
   const rk = $('rank');
   rk.className = ''; rk.textContent = '';
+  $('rNext').textContent = ''; $('rWins').textContent = '';
+  hideHint();
   void rk.offsetWidth;                       // アニメーションをやり直す
   if (ok) {
     rk.className = sc.rank + ' pop'; rk.textContent = sc.rank;
@@ -1685,6 +1789,9 @@ function showResult(ok) {
       '<span>速さ（' + sc.time.toFixed(1) + ' 秒）</span><b>' + sc.ps + ' / ' + CFG.score.wSpeed + '</b>' +
       '<span>難しさ ' + stars(G.shape.stars) + '</span><b>× ' + sc.mult.toFixed(1) + '</b>';
     $('rMsg').textContent = '';
+    const gp = nextRankGap(sc.base, sc.mult);
+    setPh($('rNext'), gp ? '次のランク ' + gp.next + ' まで|あと ' + gp.gap + ' 点' : 'いちばん上の|ランク S！');
+    setPh($('rWins'), 'これまでの成功：|ぜんぶで ' + totalClears(G.rec) + ' 回|（この文字 ' + rr.entry.clears + ' 回）');
   } else {
     rk.className = 'fail pop'; rk.textContent = '割れた';
     $('score').textContent = '0 点';
@@ -1719,6 +1826,7 @@ function showSummary() {
   for (const r of S.results) if (r) { if (r.ok) { total += r.sc.total; cleared++; } }
   setPh($('rTitle'), '「' + S.chars.join('') + '」の結果');
   $('rBest').textContent = '';
+  $('rNext').textContent = ''; $('rWins').textContent = '';
   const rk = $('rank'); rk.className = ''; rk.textContent = cleared + ' / ' + S.chars.length;
   $('score').textContent = '合計 ' + total + ' 点';
   $('rBd').innerHTML = '';
@@ -1768,6 +1876,7 @@ let lastT = 0;
 function act(evs) {
   handleEvents(evs);
   updateGauge();
+  checkHints();
   const d = G.dig;
   if (d && G.fx && !d.failed && !d.cleared) {
     if (crackUpdate(G.fx.cracks, G.needle.x, G.needle.y, d.crack) > 0) SFX.crack();
@@ -1784,7 +1893,7 @@ cv.addEventListener('pointerdown', e => {
   const r = G.dig.press(G.needle.x, G.needle.y);
   lastT = e.timeStamp;
   if (!r.ok) toast('ここには刺せない', true, 900);
-  else { SFX.scrapeStart(); SFX.scrapeSet(0, false); act(r.events); }
+  else { if (G.hintKind === 'pre') hideHint(); SFX.scrapeStart(); SFX.scrapeSet(0, false); act(r.events); }
 });
 cv.addEventListener('pointermove', e => {
   e.preventDefault();
@@ -1809,12 +1918,10 @@ cv.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
 
 // ---------- ボタン ----------
-$('bStart').addEventListener('click', toSelect);
-$('bHow').addEventListener('click', () => showHow(null));
-$('bHowGo').addEventListener('click', () => {
-  const f = howNext; howNext = null;
-  if (f) f(); else show('scTitle');
-});
+$('bStart').addEventListener('click', quickStart);
+$('bPick').addEventListener('click', toSelect);
+$('bHow').addEventListener('click', showHow);
+$('bHowGo').addEventListener('click', () => show('scTitle'));
 $('bRec').addEventListener('click', showRecords);
 $('bRecBack').addEventListener('click', toSelect);
 $('bRecReset').addEventListener('click', () => { setPh($('recAsk'), 'きろくを|ぜんぶ消しますか？'); $('recConf').hidden = false; });
@@ -1824,7 +1931,7 @@ $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-function leaveGame() { G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
+function leaveGame() { hideHint(); G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
 // 型抜き中は、誤タップで失わないよう確認する（割れた・抜けたあとは確認なし）
 $('quit').addEventListener('click', () => { if (G.over || !G.dig || G.dig.failed || G.dig.cleared) leaveGame(); else $('quitBox').classList.add('ask'); });
 $('quitYes').addEventListener('click', leaveGame);
@@ -1914,9 +2021,10 @@ window.__DEBUG = {
     return this.state();
   },
   cutAll() { return this.trace(0.5); },
-  startWord, startRandom, beginChar, showResult, showHow, showRecords, leaveGame,
+  startWord, startRandom, quickStart, beginChar, showResult, showHow, showRecords, leaveGame,
   get rec() { return G.rec; },
   get howSeen() { return G.howSeen; },
+  get hints() { return G.hints; },
   shapeOf: ch => makeShapeSync(ch),
 };
 </script>

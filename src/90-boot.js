@@ -36,8 +36,9 @@ window.__DEBUG = {
     return this.state();
   },
   cutAll() { return this.trace(0.5); },
-  startWord, startRandom, beginChar, showResult, showHow, showRecords, leaveGame,
+  startWord, startRandom, quickStart, beginChar, showResult, showHow, showRecords, leaveGame,
   get rec() { return G.rec; },
   get howSeen() { return G.howSeen; },
+  get hints() { return G.hints; },
   shapeOf: ch => makeShapeSync(ch),
 };

@@ -56,6 +56,8 @@
   #hud .stars{color:#e8a200;letter-spacing:.1em}
   #hud .time{font-variant-numeric:tabular-nums;min-width:4.2em;text-align:right}
   .gaugeRow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700}
+  .goal{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px;font-weight:900}
+  .goal #hLeft{font-variant-numeric:tabular-nums;color:var(--pinkd)}
   #gauge{flex:1;height:12px;border-radius:99px;background:#f3dfe5;overflow:hidden}
   #gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb870,#e0305c)}
   #stageWrap{position:relative;flex:1;min-height:0}
@@ -64,10 +66,15 @@
     background:rgba(90,58,72,.92);color:#fff;padding:8px 18px;border-radius:999px;font-weight:900;font-size:17px;
     opacity:0;transition:opacity .2s;pointer-events:none}
   #toast.on{opacity:1}
+  #hint{position:absolute;left:50%;top:56px;transform:translateX(-50%);z-index:4;max-width:88%;text-align:center;
+    background:rgba(255,255,255,.96);color:var(--ink);border:2px solid var(--line);padding:6px 14px;border-radius:18px;
+    font-weight:900;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none}
+  #hint.on{opacity:1}
   #toast.bad{background:rgba(200,40,80,.94)}
 
   /* 結果 */
   #scResult h2{font-size:26px}
+  #scResult>*{flex:none}
   #rank{position:relative;display:inline-block;min-height:96px;font-size:96px;font-weight:900;line-height:1;color:var(--pinkd)}
   #rank.C{color:#8a98a8}#rank.fail{color:#c0305c;font-size:48px;min-height:48px}
   #rank.S{color:#ff5c93;text-shadow:0 0 16px rgba(255,205,80,.95),0 3px 0 #fff}
@@ -101,7 +108,9 @@
   .chip small{font-size:13px;margin-left:6px;color:var(--pinkd)}
   .msg{font-size:16px;font-weight:700}
   #rBest{min-height:0;font-weight:900;font-size:18px;color:#d4366b}
-  #rBest:empty{display:none}
+  #rBest:empty,#rNext:empty,#rWins:empty{display:none}
+  #rNext{font-weight:900;color:var(--pinkd)}
+  #rWins{font-size:14px;opacity:.8}
   #rBest.new{animation:bestPop .6s cubic-bezier(.2,.9,.3,1) both}
   @keyframes bestPop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.15);opacity:1}100%{transform:scale(1)}}
   @media (prefers-reduced-motion:reduce){#rBest.new{animation:none}}
@@ -157,6 +166,7 @@
     <p class="lead" id="ttlLead"></p>
     <div class="stack">
       <button class="btn" id="bStart">あそぶ</button>
+      <button class="btn sub" id="bPick">もじをえらぶ</button>
       <button class="btn sub" id="bHow">あそびかた</button>
     </div>
   </section>
@@ -213,12 +223,14 @@
         <span class="stars nw" id="hStars"></span>
         <span class="time nw" id="hTime">0.0 秒</span>
       </div>
+      <div class="goal"><span class="nw">ぜんぶ ぬきとろう</span><span class="nw" id="hLeft"></span></div>
       <div class="gaugeRow"><span class="nw">ヒビ</span><div id="gauge"><i></i></div></div>
     </div>
     <div id="stageWrap">
       <canvas id="cv"></canvas>
       <div id="vig"></div>
       <div id="toast"></div>
+      <div id="hint" aria-live="polite"></div>
       <div id="quitBox">
         <button class="btn sub sm" id="quit">やめる</button>
         <span id="quitAsk"><span class="nw">やめますか？</span><button class="btn sm" id="quitYes">やめる</button><button class="btn sub sm" id="quitNo">つづける</button></span>
@@ -233,6 +245,8 @@
     <div class="bd" id="rBd"></div>
     <div class="chips" id="rChips"></div>
     <div class="msg" id="rBest"></div>
+    <div class="msg" id="rNext"></div>
+    <div class="msg" id="rWins"></div>
     <div class="msg" id="rMsg"></div>
     <div class="row" id="rBtns"></div>
   </section>

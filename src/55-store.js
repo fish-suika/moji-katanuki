@@ -70,3 +70,48 @@ function clearRecord(st) {
 }
 function loadHowtoSeen(st) { try { return !!st && st.getItem(HOWTO_KEY) === '1'; } catch (_) { return false; } }
 function saveHowtoSeen(st) { try { if (!st) return false; st.setItem(HOWTO_KEY, '1'); return true; } catch (_) { return false; } }
+
+// ===== すぐ始める・一言ヒント・次のランクまでの点数（純ロジック）=====
+const LEVEL_KEY = 'mojiKatanuki.level';
+const HINT_KEY = 'mojiKatanuki.hints';
+const FIRST_CHAR = '口';
+const LEVELS = ['easy', 'normal', 'hard'];
+const HINT_TEXT = {
+  pre: 'みぞの上に|針を置こう',
+  edge: 'ふちは|ヒビが入るよ。|ゆっくり',
+  fast: 'はやすぎ！|ゆっくり|丁寧に',
+  near: 'もう少し！|光っている|ところ',
+};
+function loadLastLevel(st) { try { const v = st && st.getItem(LEVEL_KEY); return LEVELS.indexOf(v) >= 0 ? v : null; } catch (_) { return null; } }
+function saveLastLevel(st, lv) { try { if (!st || LEVELS.indexOf(lv) < 0) return false; st.setItem(LEVEL_KEY, lv); return true; } catch (_) { return false; } }
+// 「あそぶ」を押したときの最初の 1 枚。初回（あそびかた未読・記録なし）は「口」(かんたん)、2 回目以降は直近の段階（未選択はふつう）でランダム
+function startPlan(rec, howSeen, lastLevel) {
+  const played = !!(rec && rec.total > 0);
+  if (!howSeen && !played) return { first: true, ch: FIRST_CHAR, level: 'easy' };
+  return { first: false, ch: null, level: LEVELS.indexOf(lastLevel) >= 0 ? lastLevel : 'normal' };
+}
+function loadHintsSeen(st) {
+  const s = { pre: false, edge: false, fast: false, near: false };
+  try { const o = st ? JSON.parse(st.getItem(HINT_KEY)) : null; if (o && typeof o === 'object') for (const k of Object.keys(s)) s[k] = o[k] === true; } catch (_) { }
+  return s;
+}
+function saveHintsSeen(st, seen) { try { if (!st) return false; st.setItem(HINT_KEY, JSON.stringify(seen)); return true; } catch (_) { return false; } }
+// まだ出していないヒントなら {text, seen(出したことにした新しい既読)}、出し済みなら null
+function takeHint(seen, kind) {
+  if (!HINT_TEXT[kind] || (seen && seen[kind])) return null;
+  const n = Object.assign({ pre: false, edge: false, fast: false, near: false }, seen);
+  n[kind] = true;
+  return { text: HINT_TEXT[kind], seen: n };
+}
+// 次のランクまでの点数（表示する合計点の単位）。最上位 S は null
+function nextRankGap(base, mult) {
+  const R = CFG.score.rank;
+  if (base >= R.S) return null;
+  const next = base >= R.A ? 'S' : base >= R.B ? 'A' : 'B';
+  return { next, gap: Math.max(1, Math.ceil((R[next] - base) * mult)) };
+}
+function totalClears(rec) {
+  const r = sanitizeRecord(rec); let n = 0;
+  for (const k of Object.keys(r.chars)) n += r.chars[k].clears;
+  return n;
+}
