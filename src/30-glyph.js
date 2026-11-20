@@ -6,11 +6,13 @@ function glyphFont() { return CFG.glyph.weight + ' ' + CFG.glyph.fontPx + 'px ' 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Web フォントを待つ（読めなくても先に進む）
+// 戻り値: 全部読めたら true、タイムアウトや失敗があったら false（その場合の型はキャッシュしない）
 async function loadGlyphFonts(text) {
-  if (!(document.fonts && document.fonts.load)) return;
+  if (!(document.fonts && document.fonts.load)) return true;
+  const TIMEOUT = {};
   const jobs = ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"'].map(f =>
-    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).catch(() => []), sleep(CFG.glyph.fontTimeoutMs)]));
-  try { await Promise.all(jobs); } catch (e) { /* 端末のフォントで続行 */ }
+    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).then(() => true, () => false), sleep(CFG.glyph.fontTimeoutMs).then(() => TIMEOUT)]));
+  try { const rs = await Promise.all(jobs); return rs.every(x => x === true); } catch (e) { return false; /* 端末のフォントで続行 */ }
 }
 
 // 文字を描いて {mask(0..1), ink(画素数), colored(色つき=絵文字)} を返す
@@ -56,7 +58,7 @@ function glyphMissing(r) {
 }
 
 // 1 文字 → { ok, shape } か { ok:false, kind:'unsupported'|'toohard', msg }
-function makeShapeSync(ch) {
+function makeShapeSync(ch, noCache) {
   if (GLYPH.cache.has(ch)) return GLYPH.cache.get(ch);
   let res;
   const bad = { ok: false, kind: 'unsupported', ch, msg: 'この文字は型にできません：「' + ch + '」' };
@@ -81,10 +83,11 @@ function makeShapeSync(ch) {
       else res = { ok: true, ch, shape };
     }
   }
-  GLYPH.cache.set(ch, res);
+  if (!noCache) GLYPH.cache.set(ch, res);
   return res;
 }
 async function makeShape(ch) {
-  if (!GLYPH.cache.has(ch)) await loadGlyphFonts(ch);
-  return makeShapeSync(ch);
+  let loaded = true;
+  if (!GLYPH.cache.has(ch)) loaded = await loadGlyphFonts(ch);
+  return makeShapeSync(ch, !loaded);
 }

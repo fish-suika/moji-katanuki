@@ -364,6 +364,95 @@ const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅�
     T('速さ: 目安時間を大きく超えると速さの点が減る', slow.cleared && scoreDig(slow, sq2).ps < CFG.score.wSpeed && scoreDig(simBot(sq2, 0.5, 0.005, 3), sq2).ps === CFG.score.wSpeed, 'slow=' + scoreDig(slow, sq2).ps + ' t=' + slow.t.toFixed(1) + ' target=' + targetTime(sq2).toFixed(1));
   })();
 
+  // --- テストプレイ後の不具合修正 ---
+  (function () {
+    const sh = makeShapeSync('口').shape, l = sh.loops[0], n = l.n;
+    // 輪郭に沿って「秒速 sp」で動かし、dtMs ごとに move を呼ぶ（弧長で位置を補間）
+    const walk = (sp, dtMs, secs) => {
+      const d = newDig(sh, P180);
+      const cum = [0]; for (let i = 0; i < n; i++) cum.push(cum[i] + Math.hypot(l.pts[2 * ((i + 1) % n)] - l.pts[2 * i], l.pts[2 * ((i + 1) % n) + 1] - l.pts[2 * i + 1]));
+      const at = s => { s = ((s % cum[n]) + cum[n]) % cum[n]; let k = 0; while (k < n - 1 && cum[k + 1] < s) k++; const u = (s - cum[k]) / ((cum[k + 1] - cum[k]) || 1); const a = k, b = (k + 1) % n; return [l.pts[2 * a] + (l.pts[2 * b] - l.pts[2 * a]) * u, l.pts[2 * a + 1] + (l.pts[2 * b + 1] - l.pts[2 * a + 1]) * u]; };
+      d.press(...at(0));
+      const dt = dtMs / 1000;
+      for (let t = dt, s = 0; t <= secs + 1e-9 && !d.failed && !d.cleared; t += dt) { s = sp * t; const p = at(s); d.move(p[0], p[1], dt, dt); }
+      return d;
+    };
+    const sp = P180.speedLimit * 0.5;
+    const d1 = walk(sp, 1, 0.5), d16 = walk(sp, 16, 0.5);
+    T('速度: 1ms 間隔の細かい入力でも、16ms 間隔と同程度の速さになる', d1.ema > sp * 0.7 && d1.ema < sp * 1.4 && Math.abs(d1.ema - d16.ema) < sp * 0.3, 'ema1=' + d1.ema.toFixed(2) + ' ema16=' + d16.ema.toFixed(2) + ' 実速=' + sp.toFixed(2));
+    T('速度: 1ms 間隔・適度な速さならヒビは 0', d1.crack === 0 && !d1.failed, 'crack=' + d1.crack);
+    T('速度: dt=0 の move でも落ちず、速度ヒビも入らない', (() => { const d = newDig(sh, P180); d.press(l.pts[0], l.pts[1]); try { for (let i = 1; i < 6; i++) d.move(l.pts[2 * i], l.pts[2 * i + 1], 0, 0); } catch (e) { return false; } return d.crack === 0 && !d.failed; })());
+    // 長い間のあと
+    const run = (gap) => {
+      const d = newDig(sh, P180);
+      d.press(l.pts[0], l.pts[1]);
+      const dt = (l.len / n) / sp;
+      for (let i = 1; i <= 10; i++) d.move(l.pts[2 * i], l.pts[2 * i + 1], dt, dt);
+      const c0 = d.crack;
+      d.move(l.pts[2 * 25], l.pts[2 * 25 + 1], 0.02, gap);
+      return { d, c0, c1: d.crack };
+    };
+    const ctl = run(0.02), paused = run(0.5);
+    T('速度: （対照）間が空かない急な動きにはヒビが入る', ctl.c1 > ctl.c0 && !ctl.d.failed, 'c0=' + ctl.c0 + ' c1=' + ctl.c1 + ' failed=' + ctl.d.failed);
+    T('速度: 長い間のあとの最初の move では速度ヒビが入らない', paused.c1 === paused.c0 && !paused.d.failed, 'c0=' + paused.c0 + ' c1=' + paused.c1);
+  })();
+  (function () {
+    // クリアした move で failed が立たない
+    const sh = makeShapeSync('口').shape;
+    const ops = [];
+    const d0 = newDig(sh, P180);
+    let k = 0, clearAt = -1;
+    outer: for (const part of sh.parts) for (const l of part.loops) {
+      const dt = (l.len / l.n) / (P180.speedLimit * 0.5), n = l.n;
+      ops.push(['press', l.pts[0], l.pts[1]]); d0.press(l.pts[0], l.pts[1]);
+      for (let i = 1; i <= n + 4 && d0.down; i++) {
+        ops.push(['move', l.pts[2 * (i % n)], l.pts[2 * (i % n) + 1], dt]);
+        d0.move(l.pts[2 * (i % n)], l.pts[2 * (i % n) + 1], dt, dt);
+        if (d0.cleared) { clearAt = ops.length - 1; break outer; }
+      }
+      d0.release();
+    }
+    const d = newDig(sh, P180);
+    ops.forEach((o, idx) => {
+      if (o[0] === 'press') { d.press(o[1], o[2]); return; }
+      if (idx === clearAt) { d.crack = 0.9999; d.ema = 50; d.move(o[1], o[2], 0.05, 0.05); }
+      else d.move(o[1], o[2], o[3], o[3]);
+    });
+    T('クリアした move で failed が立たない（cleared と failed は同時に true にならない）', clearAt > 0 && d.cleared && !d.failed, 'clearAt=' + clearAt + ' cleared=' + d.cleared + ' failed=' + d.failed);
+  })();
+  (function () {
+    // setParams: 画面サイズが変わって判定幅が広がったら、新しい幅で nearest・press が効く
+    const sh = makeShapeSync('口').shape, l = sh.loops[0];
+    const P = Object.assign({}, P180), d = newDig(sh, P);
+    const nm = normalAt(l, 0, 0, 0), off = P.edge * 1.5;
+    const px = l.pts[0] + nm[0] * off, py = l.pts[1] + nm[1] * off;
+    const before = d.nearest(px, py).d;
+    T('setParams: 変更前は旧 edge の外（刺せない）', before > P.edge && !d.press(px, py).ok, 'd=' + before.toFixed(3) + ' edge=' + P.edge.toFixed(3));
+    const P2 = judgeParams(90);
+    d.setParams(P2);
+    T('setParams: P の参照を保ったまま更新される', d.P === P && P.edge === P2.edge && P.edge > P180.edge);
+    const after = d.nearest(px, py);
+    T('setParams: 広がった edge 以内の点で nearest が見つかり、押せる', after.id >= 0 && after.d <= P.edge && d.press(px, py).ok, 'd=' + after.d.toFixed(3) + ' edge=' + P.edge.toFixed(3));
+  })();
+  (function () {
+    const m = validateInput('❤️');
+    T('絵文字エラー: 「❤️」のメッセージに単独の U+FE0F が入らない', !m.ok && m.msg.indexOf('❤️') >= 0 && m.msg.split('❤️').join('').indexOf('\uFE0F') < 0, m.msg);
+    const m2 = validateInput('\uFE0F');
+    T('絵文字エラー: 直前の文字が無いときは「絵文字は型にできません」', !m2.ok && m2.msg === '絵文字は型にできません', m2.msg);
+    const m3 = validateInput('1\u20E3');
+    T('絵文字エラー: キーキャップは直前の文字とつなげて見せる', !m3.ok && m3.msg.indexOf('1\u20E3') >= 0, m3.msg);
+    const m4 = validateInput('😀');
+    T('絵文字エラー: 通常の絵文字は今まで通り', !m4.ok && m4.msg.indexOf('😀') >= 0);
+  })();
+  (function () {
+    // フォント読込失敗時の型はキャッシュしない
+    GLYPH.cache.delete('口');
+    const r = makeShapeSync('口', true);
+    T('キャッシュ: noCache 指定では GLYPH.cache に入らない', r.ok && !GLYPH.cache.has('口'));
+    const r2 = makeShapeSync('口');
+    T('キャッシュ: 既定ではこれまで通りキャッシュされる', r2.ok && GLYPH.cache.has('口'));
+  })();
+
   document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;
   document.title = (fail ? 'FAIL ' : 'OK ') + pass + '/' + (pass + fail);
 })();

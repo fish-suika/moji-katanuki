@@ -88,6 +88,7 @@ let resizeTimer = 0;
 window.addEventListener('resize', () => {
   if (G.screen !== 'scGame') return;
   layout();
+  if (G.dig) G.dig.setParams(judgeParams(G.view.R));
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { if (G.shape && G.color && G.fx && G.screen === 'scGame') { G.tex = bakeCandy(G.color, G.seed, G.view.R, G.view.dpr); G.fx.shards = null; } }, 150);
 });
@@ -109,25 +110,39 @@ async function pickRandom(level) {
 }
 
 // ---------- 進行 ----------
+// 開始処理中は、開始系のボタンを押せなくして二重起動を防ぐ
+let starting = false;
+function setStarting(on) {
+  starting = on;
+  for (const b of document.querySelectorAll('#bStart, [data-lv], #bGo')) b.disabled = on;
+}
 async function startRandom(level) {
-  $('selMsg').textContent = '文字を選んでいます…';
-  const r = await pickRandom(level);
-  $('selMsg').textContent = '';
-  if (!r) { show('scSelect'); setPh($('selMsg'), '文字を作れませんでした'); return; }
-  G.lastLevel = level; saveLastLevel(G.store, level);
-  G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
-  launch(r);
+  if (starting) return;
+  setStarting(true);
+  try {
+    $('selMsg').textContent = '文字を選んでいます…';
+    const r = await pickRandom(level);
+    $('selMsg').textContent = '';
+    if (!r) { show('scSelect'); setPh($('selMsg'), '文字を作れませんでした'); return; }
+    G.lastLevel = level; saveLastLevel(G.store, level);
+    G.session = { mode: 'random', level, chars: [r.ch], idx: 0, results: [], first: r };
+    launch(r);
+  } finally { setStarting(false); }
 }
 // 「あそぶ」: 文字選択を挟まず、すぐ 1 枚目を始める
 async function quickStart() {
+  if (starting) return;
   const plan = startPlan(G.rec, G.howSeen, G.lastLevel);
   if (plan.first) {
-    const r = await makeShape(plan.ch);
-    if (r.ok) {
-      G.session = { mode: 'random', level: plan.level, chars: [r.ch], idx: 0, results: [], first: r };
-      launch(r);
-      return;
-    }
+    setStarting(true);
+    try {
+      const r = await makeShape(plan.ch);
+      if (r.ok) {
+        G.session = { mode: 'random', level: plan.level, chars: [r.ch], idx: 0, results: [], first: r };
+        launch(r);
+        return;
+      }
+    } finally { setStarting(false); }
   }
   startRandom(plan.level);
 }
@@ -138,22 +153,27 @@ function showHow() {
   if (!G.howSeen) { G.howSeen = true; saveHowtoSeen(G.store); }
 }
 async function startWord(str) {
+  if (starting) return false;
   const v = validateInput(str);
   if (!v.ok) { setPh($('selMsg'), v.msg); return false; }
-  $('selMsg').textContent = '型を作っています…';
-  const shapes = [];
-  for (const ch of v.chars) {
-    const r = await makeShape(ch);
-    if (!r.ok) { setPh($('selMsg'), r.msg); return false; }
-    shapes.push(r);
-  }
-  $('selMsg').textContent = '';
-  G.session = { mode: 'word', chars: v.chars, idx: 0, results: [] };
-  launch(shapes[0]);
-  return true;
+  setStarting(true);
+  try {
+    $('selMsg').textContent = '型を作っています…';
+    const shapes = [];
+    for (const ch of v.chars) {
+      const r = await makeShape(ch);
+      if (!r.ok) { setPh($('selMsg'), r.msg); return false; }
+      shapes.push(r);
+    }
+    $('selMsg').textContent = '';
+    G.session = { mode: 'word', chars: v.chars, idx: 0, results: [] };
+    launch(shapes[0]);
+    return true;
+  } finally { setStarting(false); }
 }
 async function beginChar(res) {
   const S = G.session;
+  clearTimeout(toastTimer); $('toast').classList.remove('on');
   if (!res) res = await makeShape(S.chars[S.idx]);
   show('scGame');
   layout();
@@ -163,7 +183,7 @@ async function beginChar(res) {
   G.char = res.ch;
   G.color = CANDY[Math.floor(Math.random() * CANDY.length)];
   G.seed = (Math.random() * 1e9) | 0;
-  G.over = false; G.needle.vis = false; G.touch = false;
+  G.over = false; G.needle.vis = false; G.touch = false; activePtr = null;
   G.attempt++;
   $('quitBox').classList.remove('ask');
   G.paths = buildPaths(G.shape);
@@ -245,6 +265,20 @@ function handleEvents(evs) {
   }
 }
 
+// 結果・まとめ画面のボタン: どれか 1 つを押したら全部押せなくする（連打で文字が飛ばないように）
+function resultBtnAdder(box) {
+  return (label, fn, sub) => {
+    const e = document.createElement('button');
+    e.className = 'btn' + (sub ? ' sub' : ''); e.textContent = label;
+    e.addEventListener('click', () => {
+      if (box.dataset.used) return;
+      box.dataset.used = '1';
+      for (const x of box.querySelectorAll('button')) x.disabled = true;
+      fn();
+    });
+    box.appendChild(e);
+  };
+}
 function showResult(ok) {
   const S = G.session, dig = G.dig;
   const last = S.idx >= S.chars.length - 1;
@@ -288,8 +322,8 @@ function showResult(ok) {
     $('rBd').innerHTML = '';
     setPh($('rMsg'), dig.failWhy === 'out' ? '溝の外に|出てしまいました' : 'ヒビが|入りすぎました');
   }
-  const b = $('rBtns'); b.innerHTML = '';
-  const add = (label, fn, sub) => { const e = document.createElement('button'); e.className = 'btn' + (sub ? ' sub' : ''); e.textContent = label; e.addEventListener('click', fn); b.appendChild(e); };
+  const b = $('rBtns'); b.innerHTML = ''; delete b.dataset.used;
+  const add = resultBtnAdder(b);
   add('もう一度', () => beginChar({ ok: true, ch: G.char, shape: G.shape }));
   if (S.mode === 'random') add('次の文字', () => startRandom(S.level), true);
   else if (!last) add('次の文字', () => { S.idx++; beginChar(); });
@@ -325,8 +359,8 @@ function showSummary() {
     return '<span class="chip">' + esc(c) + '<small>' + (r && r.ok ? r.sc.rank + ' ' + r.sc.total : '×') + '</small></span>';
   }).join('');
   setPh($('rMsg'), cleared === S.chars.length ? '全部抜けた！' : '抜けた文字は|' + cleared + ' 文字');
-  const b = $('rBtns'); b.innerHTML = '';
-  const add = (label, fn, sub) => { const e = document.createElement('button'); e.className = 'btn' + (sub ? ' sub' : ''); e.textContent = label; e.addEventListener('click', fn); b.appendChild(e); };
+  const b = $('rBtns'); b.innerHTML = ''; delete b.dataset.used;
+  const add = resultBtnAdder(b);
   add('はじめから', () => { S.idx = 0; S.results = []; beginChar(); });
   add('文字を選ぶ', toSelect, true);
 }
@@ -374,10 +408,13 @@ function act(evs) {
 }
 function updateGauge() { if (G.dig) $('gauge').firstElementChild.style.width = Math.round(G.dig.crack * 100) + '%'; }
 
+let activePtr = null;                       // 操作中のポインタ id（2 本目以降の指は無視する）
 cv.addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (activePtr !== null) return;
+  activePtr = e.pointerId;
   try { cv.setPointerCapture(e.pointerId); } catch (_) { }
-  G.touch = e.pointerType !== 'mouse';
+  G.touch = e.pointerType === 'touch';
   setNeedle(e);
   if (!G.dig || G.over) return;
   const r = G.dig.press(G.needle.x, G.needle.y);
@@ -387,22 +424,27 @@ cv.addEventListener('pointerdown', e => {
 });
 cv.addEventListener('pointermove', e => {
   e.preventDefault();
+  if (activePtr !== null ? e.pointerId !== activePtr : e.pointerType !== 'mouse') return;
   const list = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
   for (const ev of list) {
     setNeedle(ev);
     if (G.dig && G.dig.down && !G.over) {
-      const dt = clamp((ev.timeStamp - lastT) / 1000, 1 / 240, 0.1);
+      const gap = Math.max(0, (ev.timeStamp - lastT) / 1000), dt = clamp(gap, 0, 0.1);
       lastT = ev.timeStamp;
       const before = G.dig.crack;
-      act(G.dig.move(G.needle.x, G.needle.y, dt));
+      act(G.dig.move(G.needle.x, G.needle.y, dt, gap));
       if (G.fx) G.fx.lastMove = G.anim;
       if (G.dig.down) SFX.scrapeSet(G.dig.ema / G.P.speedLimit, G.dig.crack > before);
     }
   }
 });
-const lift = e => { if (G.dig) G.dig.release(); if (G.touch) G.needle.vis = false; SFX.scrapeStop(); };
-cv.addEventListener('pointerup', lift);
-cv.addEventListener('pointercancel', lift);
+const lift = () => { if (G.dig) G.dig.release(); if (G.touch) G.needle.vis = false; SFX.scrapeStop(); };
+const liftActive = e => { if (e.pointerId !== activePtr) return; activePtr = null; lift(); };
+cv.addEventListener('pointerup', liftActive);
+cv.addEventListener('pointercancel', liftActive);
+cv.addEventListener('lostpointercapture', liftActive);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { activePtr = null; lift(); } });
+window.addEventListener('blur', () => { activePtr = null; lift(); });
 cv.addEventListener('pointerleave', e => { if (!G.touch && !(G.dig && G.dig.down)) G.needle.vis = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -421,7 +463,7 @@ $('bBackTitle').addEventListener('click', () => show('scTitle'));
 document.querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => startRandom(b.dataset.lv)));
 $('bGo').addEventListener('click', () => startWord($('inp').value));
 $('inp').addEventListener('keydown', e => { if (e.key === 'Enter') startWord($('inp').value); });
-function leaveGame() { hideHint(); G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
+function leaveGame() { activePtr = null; hideHint(); G.attempt++; SFX.scrapeStop(); if (G.dig) G.dig.release(); $('quitBox').classList.remove('ask'); toSelect(); }
 // 型抜き中は、誤タップで失わないよう確認する（割れた・抜けたあとは確認なし）
 $('quit').addEventListener('click', () => { if (G.over || !G.dig || G.dig.failed || G.dig.cleared) leaveGame(); else $('quitBox').classList.add('ask'); });
 $('quitYes').addEventListener('click', leaveGame);
@@ -451,7 +493,7 @@ function frame(t) {
   const dt = Math.min(0.1, (t - prevT) / 1000 || 0); prevT = t;
   G.anim = t / 1000;
   if (G.screen === 'scGame' && G.dig) {
-    if (G.dig.started && !G.over) {
+    if (G.dig.started && !G.over && !$('quitBox').classList.contains('ask')) {
       G.dig.t += dt;
       $('hTime').textContent = G.dig.t.toFixed(1) + ' 秒';
     }

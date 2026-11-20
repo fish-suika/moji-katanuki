@@ -73,6 +73,8 @@ const CFG = {
   stepLen: 0.008,              // 判定の細かい区切り
   crackRate: 1.5,              // フチを 1.0 の長さ進むとヒビがいくつ増えるか
   speedLimit: 3.2,             // これ(半径/秒)を超えるとヒビ
+  speedWindow: 0.015,          // 速度は、これ(秒)以上ぶんの距離と時間を溜めてから出す（入力の頻度に左右されないように）
+  speedPauseReset: 0.25,       // 前回の動きからこれ(秒)以上空いたら、速度の見積もりをやり直す
   speedCrack: 0.5,             // 速度超過のヒビの増え方
   joinFrac: 0.98,              // 輪郭の何割切れたらつながったとみなすか
   hintFrac: 0.10,              // 切り残しがこの割合以下なら光らせる
@@ -107,8 +109,15 @@ function validateInput(str) {
     chars.push(c);
   }
   if (!chars.length) return { ok: false, chars, msg: '文字を入力してください' };
-  for (const c of chars) {
-    if (EMOJI_RE.test(c)) return { ok: false, chars, bad: c, msg: 'この文字は型にできません：「' + c + '」' };
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (EMOJI_RE.test(c)) {
+      // 単体では見えない文字（VS16・ZWJ・キーキャップ）は、直前の文字とつなげて見せる
+      const invisible = /^[‍️⃣]$/u.test(c);
+      let shown = c;
+      if (invisible) shown = i > 0 ? chars[i - 1] + c : '';
+      return { ok: false, chars, bad: c, msg: shown ? 'この文字は型にできません：「' + shown + '」' : '絵文字は型にできません' };
+    }
   }
   if (chars.length > CFG.maxChars) return { ok: false, chars, msg: '文字は' + CFG.maxChars + '文字までです' };
   return { ok: true, chars };
@@ -349,20 +358,23 @@ function judgeParams(R) {
 function newDig(shape, P) {
   P = P || judgeParams(180);
   const loops = shape.loops;
-  const cell = Math.max(P.edge, P.cutR);
-  const grid = new Map();
+  let cell = 1, grid = new Map();
   const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
   const gx = [], gy = [], gl = [], gi = [];
   for (const l of loops) {
-    for (let i = 0; i < l.n; i++) {
-      const id = gx.length;
-      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
-      gx.push(x); gy.push(y); gl.push(l.id); gi.push(i);
-      const kk = key(Math.floor(x / cell), Math.floor(y / cell));
+    for (let i = 0; i < l.n; i++) { gx.push(l.pts[2 * i]); gy.push(l.pts[2 * i + 1]); gl.push(l.id); gi.push(i); }
+  }
+  // 判定幅に合わせて格子を作り直す（画面の大きさが変わったときにも呼ぶ）
+  const rebuild = () => {
+    cell = Math.max(P.edge, P.cutR);
+    grid = new Map();
+    for (let id = 0; id < gx.length; id++) {
+      const kk = key(Math.floor(gx[id] / cell), Math.floor(gy[id] / cell));
       let a = grid.get(kk); if (!a) grid.set(kk, a = []);
       a.push(id);
     }
-  }
+  };
+  rebuild();
   const cut = loops.map(l => new Uint8Array(l.n));
   const cutCount = loops.map(() => 0);
   const joined = loops.map(() => false);
@@ -371,8 +383,9 @@ function newDig(shape, P) {
     shape, P, cut, cutCount, joined, partDone,
     down: false, started: false, failed: false, failWhy: null, failPos: null, cleared: false,
     crack: 0, t: 0, accSum: 0, accN: 0, lx: 0, ly: 0, ema: 0, lastMsg: '',
-    distance: 0,
+    distance: 0, accD: 0, accT: 0,
   };
+  d.setParams = function (P2) { Object.assign(P, P2); rebuild(); };
   const nearest = (x, y) => {
     const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
     let best = -1, bd = Infinity;
@@ -423,22 +436,28 @@ function newDig(shape, P) {
     if (d.failed || d.cleared) return { ok: false, msg: '' };
     const n = nearest(x, y);
     if (n.d > P.edge) { d.lastMsg = 'ここには刺せない'; return { ok: false, msg: 'ここには刺せない' }; }
-    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0;
+    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0; d.accD = 0; d.accT = 0;
     const ev = [];
     cutAround(x, y, gl[n.id], ev);
     return { ok: true, msg: '', events: ev };
   };
   d.release = function () { d.down = false; };
   // 針を動かす。前回位置から今回位置までを細かく区切って全部判定する
-  d.move = function (x, y, dt) {
+  d.move = function (x, y, dt, gap) {
     const ev = [];
     if (!d.down || d.failed || d.cleared) return ev;
     const dx = x - d.lx, dy = y - d.ly, len = Math.hypot(dx, dy);
     const n = Math.max(1, Math.ceil(len / P.step));
     const sl = len / n;
-    if (dt > 0 && len > 0) {
-      const sp = len / dt;
-      d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+    // 速度は、一定時間ぶん距離と時間を溜めてから出す（入力の頻度に左右されないように）
+    if ((gap == null ? dt : gap) >= CFG.speedPauseReset) { d.ema = 0; d.accD = 0; d.accT = 0; }   // 止まっていたあとの最初の 1 回は測らない
+    else {
+      d.accD += len; d.accT += dt;
+      if (d.accT >= CFG.speedWindow) {
+        const sp = d.accD / d.accT;
+        d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+        d.accD = 0; d.accT = 0;
+      }
     }
     d.distance += len;
     for (let i = 1; i <= n; i++) {
@@ -454,7 +473,7 @@ function newDig(shape, P) {
       cutAround(sx, sy, gl[r.id], ev);
       if (d.cleared) break;
     }
-    if (!d.failed && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
+    if (!d.failed && !d.cleared && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
       d.crack += (d.ema / P.speedLimit - 1) * dt * P.speedCrack;
       if (d.crack >= 1) { d.crack = 1; fail('crack', x, y, ev); return ev; }
     }
@@ -678,11 +697,13 @@ function glyphFont() { return CFG.glyph.weight + ' ' + CFG.glyph.fontPx + 'px ' 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Web フォントを待つ（読めなくても先に進む）
+// 戻り値: 全部読めたら true、タイムアウトや失敗があったら false（その場合の型はキャッシュしない）
 async function loadGlyphFonts(text) {
-  if (!(document.fonts && document.fonts.load)) return;
+  if (!(document.fonts && document.fonts.load)) return true;
+  const TIMEOUT = {};
   const jobs = ['"M PLUS Rounded 1c"', '"Zen Maru Gothic"'].map(f =>
-    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).catch(() => []), sleep(CFG.glyph.fontTimeoutMs)]));
-  try { await Promise.all(jobs); } catch (e) { /* 端末のフォントで続行 */ }
+    Promise.race([document.fonts.load(CFG.glyph.weight + ' 100px ' + f, text).then(() => true, () => false), sleep(CFG.glyph.fontTimeoutMs).then(() => TIMEOUT)]));
+  try { const rs = await Promise.all(jobs); return rs.every(x => x === true); } catch (e) { return false; /* 端末のフォントで続行 */ }
 }
 
 // 文字を描いて {mask(0..1), ink(画素数), colored(色つき=絵文字)} を返す
@@ -728,7 +749,7 @@ function glyphMissing(r) {
 }
 
 // 1 文字 → { ok, shape } か { ok:false, kind:'unsupported'|'toohard', msg }
-function makeShapeSync(ch) {
+function makeShapeSync(ch, noCache) {
   if (GLYPH.cache.has(ch)) return GLYPH.cache.get(ch);
   let res;
   const bad = { ok: false, kind: 'unsupported', ch, msg: 'この文字は型にできません：「' + ch + '」' };
@@ -753,12 +774,13 @@ function makeShapeSync(ch) {
       else res = { ok: true, ch, shape };
     }
   }
-  GLYPH.cache.set(ch, res);
+  if (!noCache) GLYPH.cache.set(ch, res);
   return res;
 }
 async function makeShape(ch) {
-  if (!GLYPH.cache.has(ch)) await loadGlyphFonts(ch);
-  return makeShapeSync(ch);
+  let loaded = true;
+  if (!GLYPH.cache.has(ch)) loaded = await loadGlyphFonts(ch);
+  return makeShapeSync(ch, !loaded);
 }
 
 // ===== 効果音（WebAudio で生成。外部素材なし）=====
@@ -1365,6 +1387,95 @@ const offPoint = (shape) => { // 溝から十分遠い点（砂糖菓子の隅�
     T('ランクの閾値は S > A > B', CFG.score.rank.S > CFG.score.rank.A && CFG.score.rank.A > CFG.score.rank.B && CFG.score.rank.B > 0);
     const sq2 = makeShapeSync('口').shape, slow = simBot(sq2, 0.05, 0.005, 3);
     T('速さ: 目安時間を大きく超えると速さの点が減る', slow.cleared && scoreDig(slow, sq2).ps < CFG.score.wSpeed && scoreDig(simBot(sq2, 0.5, 0.005, 3), sq2).ps === CFG.score.wSpeed, 'slow=' + scoreDig(slow, sq2).ps + ' t=' + slow.t.toFixed(1) + ' target=' + targetTime(sq2).toFixed(1));
+  })();
+
+  // --- テストプレイ後の不具合修正 ---
+  (function () {
+    const sh = makeShapeSync('口').shape, l = sh.loops[0], n = l.n;
+    // 輪郭に沿って「秒速 sp」で動かし、dtMs ごとに move を呼ぶ（弧長で位置を補間）
+    const walk = (sp, dtMs, secs) => {
+      const d = newDig(sh, P180);
+      const cum = [0]; for (let i = 0; i < n; i++) cum.push(cum[i] + Math.hypot(l.pts[2 * ((i + 1) % n)] - l.pts[2 * i], l.pts[2 * ((i + 1) % n) + 1] - l.pts[2 * i + 1]));
+      const at = s => { s = ((s % cum[n]) + cum[n]) % cum[n]; let k = 0; while (k < n - 1 && cum[k + 1] < s) k++; const u = (s - cum[k]) / ((cum[k + 1] - cum[k]) || 1); const a = k, b = (k + 1) % n; return [l.pts[2 * a] + (l.pts[2 * b] - l.pts[2 * a]) * u, l.pts[2 * a + 1] + (l.pts[2 * b + 1] - l.pts[2 * a + 1]) * u]; };
+      d.press(...at(0));
+      const dt = dtMs / 1000;
+      for (let t = dt, s = 0; t <= secs + 1e-9 && !d.failed && !d.cleared; t += dt) { s = sp * t; const p = at(s); d.move(p[0], p[1], dt, dt); }
+      return d;
+    };
+    const sp = P180.speedLimit * 0.5;
+    const d1 = walk(sp, 1, 0.5), d16 = walk(sp, 16, 0.5);
+    T('速度: 1ms 間隔の細かい入力でも、16ms 間隔と同程度の速さになる', d1.ema > sp * 0.7 && d1.ema < sp * 1.4 && Math.abs(d1.ema - d16.ema) < sp * 0.3, 'ema1=' + d1.ema.toFixed(2) + ' ema16=' + d16.ema.toFixed(2) + ' 実速=' + sp.toFixed(2));
+    T('速度: 1ms 間隔・適度な速さならヒビは 0', d1.crack === 0 && !d1.failed, 'crack=' + d1.crack);
+    T('速度: dt=0 の move でも落ちず、速度ヒビも入らない', (() => { const d = newDig(sh, P180); d.press(l.pts[0], l.pts[1]); try { for (let i = 1; i < 6; i++) d.move(l.pts[2 * i], l.pts[2 * i + 1], 0, 0); } catch (e) { return false; } return d.crack === 0 && !d.failed; })());
+    // 長い間のあと
+    const run = (gap) => {
+      const d = newDig(sh, P180);
+      d.press(l.pts[0], l.pts[1]);
+      const dt = (l.len / n) / sp;
+      for (let i = 1; i <= 10; i++) d.move(l.pts[2 * i], l.pts[2 * i + 1], dt, dt);
+      const c0 = d.crack;
+      d.move(l.pts[2 * 25], l.pts[2 * 25 + 1], 0.02, gap);
+      return { d, c0, c1: d.crack };
+    };
+    const ctl = run(0.02), paused = run(0.5);
+    T('速度: （対照）間が空かない急な動きにはヒビが入る', ctl.c1 > ctl.c0 && !ctl.d.failed, 'c0=' + ctl.c0 + ' c1=' + ctl.c1 + ' failed=' + ctl.d.failed);
+    T('速度: 長い間のあとの最初の move では速度ヒビが入らない', paused.c1 === paused.c0 && !paused.d.failed, 'c0=' + paused.c0 + ' c1=' + paused.c1);
+  })();
+  (function () {
+    // クリアした move で failed が立たない
+    const sh = makeShapeSync('口').shape;
+    const ops = [];
+    const d0 = newDig(sh, P180);
+    let k = 0, clearAt = -1;
+    outer: for (const part of sh.parts) for (const l of part.loops) {
+      const dt = (l.len / l.n) / (P180.speedLimit * 0.5), n = l.n;
+      ops.push(['press', l.pts[0], l.pts[1]]); d0.press(l.pts[0], l.pts[1]);
+      for (let i = 1; i <= n + 4 && d0.down; i++) {
+        ops.push(['move', l.pts[2 * (i % n)], l.pts[2 * (i % n) + 1], dt]);
+        d0.move(l.pts[2 * (i % n)], l.pts[2 * (i % n) + 1], dt, dt);
+        if (d0.cleared) { clearAt = ops.length - 1; break outer; }
+      }
+      d0.release();
+    }
+    const d = newDig(sh, P180);
+    ops.forEach((o, idx) => {
+      if (o[0] === 'press') { d.press(o[1], o[2]); return; }
+      if (idx === clearAt) { d.crack = 0.9999; d.ema = 50; d.move(o[1], o[2], 0.05, 0.05); }
+      else d.move(o[1], o[2], o[3], o[3]);
+    });
+    T('クリアした move で failed が立たない（cleared と failed は同時に true にならない）', clearAt > 0 && d.cleared && !d.failed, 'clearAt=' + clearAt + ' cleared=' + d.cleared + ' failed=' + d.failed);
+  })();
+  (function () {
+    // setParams: 画面サイズが変わって判定幅が広がったら、新しい幅で nearest・press が効く
+    const sh = makeShapeSync('口').shape, l = sh.loops[0];
+    const P = Object.assign({}, P180), d = newDig(sh, P);
+    const nm = normalAt(l, 0, 0, 0), off = P.edge * 1.5;
+    const px = l.pts[0] + nm[0] * off, py = l.pts[1] + nm[1] * off;
+    const before = d.nearest(px, py).d;
+    T('setParams: 変更前は旧 edge の外（刺せない）', before > P.edge && !d.press(px, py).ok, 'd=' + before.toFixed(3) + ' edge=' + P.edge.toFixed(3));
+    const P2 = judgeParams(90);
+    d.setParams(P2);
+    T('setParams: P の参照を保ったまま更新される', d.P === P && P.edge === P2.edge && P.edge > P180.edge);
+    const after = d.nearest(px, py);
+    T('setParams: 広がった edge 以内の点で nearest が見つかり、押せる', after.id >= 0 && after.d <= P.edge && d.press(px, py).ok, 'd=' + after.d.toFixed(3) + ' edge=' + P.edge.toFixed(3));
+  })();
+  (function () {
+    const m = validateInput('❤️');
+    T('絵文字エラー: 「❤️」のメッセージに単独の U+FE0F が入らない', !m.ok && m.msg.indexOf('❤️') >= 0 && m.msg.split('❤️').join('').indexOf('\uFE0F') < 0, m.msg);
+    const m2 = validateInput('\uFE0F');
+    T('絵文字エラー: 直前の文字が無いときは「絵文字は型にできません」', !m2.ok && m2.msg === '絵文字は型にできません', m2.msg);
+    const m3 = validateInput('1\u20E3');
+    T('絵文字エラー: キーキャップは直前の文字とつなげて見せる', !m3.ok && m3.msg.indexOf('1\u20E3') >= 0, m3.msg);
+    const m4 = validateInput('😀');
+    T('絵文字エラー: 通常の絵文字は今まで通り', !m4.ok && m4.msg.indexOf('😀') >= 0);
+  })();
+  (function () {
+    // フォント読込失敗時の型はキャッシュしない
+    GLYPH.cache.delete('口');
+    const r = makeShapeSync('口', true);
+    T('キャッシュ: noCache 指定では GLYPH.cache に入らない', r.ok && !GLYPH.cache.has('口'));
+    const r2 = makeShapeSync('口');
+    T('キャッシュ: 既定ではこれまで通りキャッシュされる', r2.ok && GLYPH.cache.has('口'));
   })();
 
   document.getElementById('sum').textContent = `${pass} PASS / ${fail} FAIL`;

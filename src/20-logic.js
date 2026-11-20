@@ -11,8 +11,15 @@ function validateInput(str) {
     chars.push(c);
   }
   if (!chars.length) return { ok: false, chars, msg: '文字を入力してください' };
-  for (const c of chars) {
-    if (EMOJI_RE.test(c)) return { ok: false, chars, bad: c, msg: 'この文字は型にできません：「' + c + '」' };
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (EMOJI_RE.test(c)) {
+      // 単体では見えない文字（VS16・ZWJ・キーキャップ）は、直前の文字とつなげて見せる
+      const invisible = /^[‍️⃣]$/u.test(c);
+      let shown = c;
+      if (invisible) shown = i > 0 ? chars[i - 1] + c : '';
+      return { ok: false, chars, bad: c, msg: shown ? 'この文字は型にできません：「' + shown + '」' : '絵文字は型にできません' };
+    }
   }
   if (chars.length > CFG.maxChars) return { ok: false, chars, msg: '文字は' + CFG.maxChars + '文字までです' };
   return { ok: true, chars };
@@ -253,20 +260,23 @@ function judgeParams(R) {
 function newDig(shape, P) {
   P = P || judgeParams(180);
   const loops = shape.loops;
-  const cell = Math.max(P.edge, P.cutR);
-  const grid = new Map();
+  let cell = 1, grid = new Map();
   const key = (a, b) => (a + 4096) * 8192 + (b + 4096);
   const gx = [], gy = [], gl = [], gi = [];
   for (const l of loops) {
-    for (let i = 0; i < l.n; i++) {
-      const id = gx.length;
-      const x = l.pts[2 * i], y = l.pts[2 * i + 1];
-      gx.push(x); gy.push(y); gl.push(l.id); gi.push(i);
-      const kk = key(Math.floor(x / cell), Math.floor(y / cell));
+    for (let i = 0; i < l.n; i++) { gx.push(l.pts[2 * i]); gy.push(l.pts[2 * i + 1]); gl.push(l.id); gi.push(i); }
+  }
+  // 判定幅に合わせて格子を作り直す（画面の大きさが変わったときにも呼ぶ）
+  const rebuild = () => {
+    cell = Math.max(P.edge, P.cutR);
+    grid = new Map();
+    for (let id = 0; id < gx.length; id++) {
+      const kk = key(Math.floor(gx[id] / cell), Math.floor(gy[id] / cell));
       let a = grid.get(kk); if (!a) grid.set(kk, a = []);
       a.push(id);
     }
-  }
+  };
+  rebuild();
   const cut = loops.map(l => new Uint8Array(l.n));
   const cutCount = loops.map(() => 0);
   const joined = loops.map(() => false);
@@ -275,8 +285,9 @@ function newDig(shape, P) {
     shape, P, cut, cutCount, joined, partDone,
     down: false, started: false, failed: false, failWhy: null, failPos: null, cleared: false,
     crack: 0, t: 0, accSum: 0, accN: 0, lx: 0, ly: 0, ema: 0, lastMsg: '',
-    distance: 0,
+    distance: 0, accD: 0, accT: 0,
   };
+  d.setParams = function (P2) { Object.assign(P, P2); rebuild(); };
   const nearest = (x, y) => {
     const cxi = Math.floor(x / cell), cyi = Math.floor(y / cell);
     let best = -1, bd = Infinity;
@@ -327,22 +338,28 @@ function newDig(shape, P) {
     if (d.failed || d.cleared) return { ok: false, msg: '' };
     const n = nearest(x, y);
     if (n.d > P.edge) { d.lastMsg = 'ここには刺せない'; return { ok: false, msg: 'ここには刺せない' }; }
-    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0;
+    d.down = true; d.started = true; d.lx = x; d.ly = y; d.ema = 0; d.accD = 0; d.accT = 0;
     const ev = [];
     cutAround(x, y, gl[n.id], ev);
     return { ok: true, msg: '', events: ev };
   };
   d.release = function () { d.down = false; };
   // 針を動かす。前回位置から今回位置までを細かく区切って全部判定する
-  d.move = function (x, y, dt) {
+  d.move = function (x, y, dt, gap) {
     const ev = [];
     if (!d.down || d.failed || d.cleared) return ev;
     const dx = x - d.lx, dy = y - d.ly, len = Math.hypot(dx, dy);
     const n = Math.max(1, Math.ceil(len / P.step));
     const sl = len / n;
-    if (dt > 0 && len > 0) {
-      const sp = len / dt;
-      d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+    // 速度は、一定時間ぶん距離と時間を溜めてから出す（入力の頻度に左右されないように）
+    if ((gap == null ? dt : gap) >= CFG.speedPauseReset) { d.ema = 0; d.accD = 0; d.accT = 0; }   // 止まっていたあとの最初の 1 回は測らない
+    else {
+      d.accD += len; d.accT += dt;
+      if (d.accT >= CFG.speedWindow) {
+        const sp = d.accD / d.accT;
+        d.ema = d.ema === 0 ? sp : d.ema * 0.6 + sp * 0.4;
+        d.accD = 0; d.accT = 0;
+      }
     }
     d.distance += len;
     for (let i = 1; i <= n; i++) {
@@ -358,7 +375,7 @@ function newDig(shape, P) {
       cutAround(sx, sy, gl[r.id], ev);
       if (d.cleared) break;
     }
-    if (!d.failed && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
+    if (!d.failed && !d.cleared && dt > 0 && d.ema > P.speedLimit) {                    // 速すぎ: ヒビ
       d.crack += (d.ema / P.speedLimit - 1) * dt * P.speedCrack;
       if (d.crack >= 1) { d.crack = 1; fail('crack', x, y, ev); return ev; }
     }
